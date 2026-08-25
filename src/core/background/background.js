@@ -114,7 +114,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       }
       WCC_CLAIM_DETECTOR.detectClaims(message.document).then(
         function (res) {
-          sendResponse({ ok: true, index: { claims: res.claims, analyzed: res.analyzed, truncated: res.truncated }, cached: res.cached });
+          sendResponse({ ok: true, index: { claims: res.claims, opinions: res.opinions || [], analyzed: res.analyzed, truncated: res.truncated }, cached: res.cached });
         },
         function (err) {
           sendResponse({ ok: false, reason: String(err && err.message || 'detect_failed') });

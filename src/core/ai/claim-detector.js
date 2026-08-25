@@ -128,11 +128,23 @@
 
   function buildIndex(sentences, verdictsBySid, truncated) {
     var claims = [];
+    var opinions = [];
     var seen = {};
     // 用第一批输出为准；缺失 sid 保守归 none
     sentences.forEach(function (s, i) {
       var v = verdictsBySid[s.id] || { verdict: 'none' };
       seen[s.id] = true;
+      if (v.verdict === 'opinion') {
+        opinions.push({
+          id: 'opinion-' + i,
+          text: s.text,
+          type: 'opinion',
+          verifiable: false,
+          sentenceId: s.id,
+          position: { paraId: s.paraId, start: s.start, end: s.end }
+        });
+        return;
+      }
       if (v.verdict !== 'claim') return;
       claims.push({
         id: 'claim-' + i,
@@ -145,6 +157,7 @@
     });
     return {
       claims: claims,
+      opinions: opinions,
       analyzed: sentences.length,
       truncated: !!truncated
     };
@@ -156,11 +169,11 @@
   function detectClaims(documentPayload) {
     if (!CONFIG || !CONFIG.DEEPSEEK_API_KEY) return Promise.reject(new Error('config_missing'));
     var sentences = (documentPayload && documentPayload.sentences) || [];
-    if (!sentences.length) return Promise.resolve({ claims: [], analyzed: 0, truncated: false, cached: false });
+    if (!sentences.length) return Promise.resolve({ claims: [], opinions: [], analyzed: 0, truncated: false, cached: false });
 
     var key = docFingerprint(documentPayload);
     return cacheGet(key).then(function (hit) {
-      if (hit) return { claims: hit.claims, analyzed: hit.analyzed, truncated: hit.truncated, cached: true };
+      if (hit) return { claims: hit.claims, opinions: hit.opinions || [], analyzed: hit.analyzed, truncated: hit.truncated, cached: true };
 
       var truncated = sentences.length > MAX_SENTENCES;
       var work = sentences.slice(0, MAX_SENTENCES);
@@ -189,9 +202,9 @@
           if (v && v.sid) verdictsBySid[v.sid] = v;
         });
         var index = buildIndex(work, verdictsBySid, truncated);
-        var entry = { claims: index.claims, analyzed: index.analyzed, truncated: index.truncated };
+        var entry = { claims: index.claims, opinions: index.opinions, analyzed: index.analyzed, truncated: index.truncated };
         cacheSet(key, entry);
-        return { claims: index.claims, analyzed: index.analyzed, truncated: index.truncated, cached: false };
+        return { claims: index.claims, opinions: index.opinions, analyzed: index.analyzed, truncated: index.truncated, cached: false };
       });
     });
   }

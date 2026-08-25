@@ -5,9 +5,14 @@
 
   var els = {
     empty: document.getElementById('empty-state'),
+    overview: document.getElementById('overview-state'),
+    ovTitle: document.getElementById('ov-title'),
+    ovStats: document.getElementById('ov-stats'),
+    ovList: document.getElementById('ov-list'),
     card: document.getElementById('claim-card'),
     text: document.getElementById('claim-text'),
     expand: document.getElementById('claim-expand'),
+    backOverview: document.getElementById('back-overview'),
     sourceTitle: document.getElementById('claim-source-title'),
     tabs: document.getElementById('mode-tabs'),
     loading: document.getElementById('loading-state'),
@@ -31,11 +36,15 @@
   // ---------- 全局状态 ----------
   var state = {
     claimPayload: null,   // 当前 Active Selection payload
+    docIndex: null,       // 本文 Claim Index（U4 概览态）
     mode: 'truth',        // 当前 Tab
     results: {},          // mode -> { result, cached }
+    verified: {},         // claimId -> supportLevel（概览已核实统计）
     analyzing: false,
     seq: 0                // 丢弃过期响应（连续深读时旧响应作废）
   };
+
+  var CLAIM_TYPE_NAMES = { fact: '事实', number: '数字', causal: '因果', compare: '比较', predict: '预测', define: '定义', other: '其他', opinion: '观点' };
 
   var LOADING_STEPS = {
     truth: ['解析当前 Claim', '检索相关知识', '核对表述与证据'],
@@ -56,6 +65,13 @@
     els.tabs.hidden = !hasClaim;
     show(els.empty); // 先统一显示 empty，再按需隐藏
     if (hasClaim) hide(els.empty);
+    // 概览态（U4）：无 Claim 工作台但已有本文 Index（VD3：有 Index 默认概览）
+    els.overview.hidden = !(!hasClaim && state.docIndex && state.docIndex.index && state.docIndex.index.claims.length > 0);
+    if (!els.overview.hidden) {
+      showOverview();
+      hide(els.loading); hide(els.error); hide(els.result); hide(els.foot); hide(els.regen);
+      return;
+    }
     if (!hasClaim) {
       hide(els.loading); hide(els.error); hide(els.result); hide(els.foot); hide(els.regen);
       return;
@@ -131,6 +147,10 @@
               verified: resp.analysis.verified,
               sources: resp.analysis.sources
             };
+            // 记录概览"已核实"（从本文概览进入的求真）
+            if (mode === 'truth' && state.claimPayload.__claimId && resp.analysis.result && resp.analysis.result.supportLevel) {
+              state.verified[state.claimPayload.__claimId] = resp.analysis.result.supportLevel;
+            }
           } else {
             state.results[mode] = null;
             state.lastError = (resp && resp.reason) || 'no_response';
@@ -335,6 +355,50 @@
 
   var RENDERERS = { truth: renderTruth, deep: renderDeep, differ: renderDiffer };
 
+  // ---------- 本文概览（U4） ----------
+
+  function showOverview() {
+    var di = state.docIndex;
+    var index = di.index;
+    var claims = index.claims || [];
+    var opinions = index.opinions || [];
+    els.ovTitle.textContent = di.title || '本文';
+    els.ovStats.innerHTML = '';
+    var stats = [
+      { label: '可验证声明', n: claims.length, cls: '' },
+      { label: '主观观点', n: opinions.length, cls: '' },
+      { label: '已核实', n: Object.keys(state.verified).length, cls: '' }
+    ];
+    stats.forEach(function (s) {
+      var span = el('span', 'ov-stat');
+      span.innerHTML = s.label + ' <b>' + s.n + '</b>';
+      els.ovStats.appendChild(span);
+    });
+    els.ovList.innerHTML = '';
+    claims.forEach(function (claim) {
+      var item = el('button', 'ov-item glass');
+      var head = el('div', 'ov-item-head');
+      head.appendChild(el('span', 'ov-type', CLAIM_TYPE_NAMES[claim.type] || '声明'));
+      var v = state.verified[claim.id];
+      if (v) head.appendChild(el('span', 'ov-verified', SUPPORT_BADGES[v] || v));
+      item.appendChild(head);
+      item.appendChild(el('div', 'ov-text', esc(claim.text)));
+      item.addEventListener('click', function () {
+        showClaim({
+          title: String(di.title || '') + ' · 本文声明',
+          url: di.url || '',
+          selectedText: claim.text,
+          capturedAt: new Date().toISOString(),
+          __claimId: claim.id
+        });
+      });
+      els.ovList.appendChild(item);
+    });
+    if (!claims.length) {
+      els.ovList.appendChild(el('div', 'muted', '本文没有识别出可验证声明。'));
+    }
+  }
+
   function renderResult(mode, entry) {
     hide(els.error);
     if (!entry) { // 该模式上次失败
@@ -367,6 +431,7 @@
     els.text.classList.remove('expanded');
     els.expand.textContent = '展开全文';
     els.sourceTitle.textContent = payload.title || '';
+    els.backOverview.hidden = !state.docIndex; // 有本文 Index 时可返回概览
     renderView();
   }
 
@@ -405,15 +470,26 @@
     startAnalysis(state.mode, true); // 绕过前端缓存重新请求
   });
 
-  // 面板打开时拉取当前 Active Selection
+  els.backOverview.addEventListener('click', function () {
+    resetToEmpty(); // 保留 docIndex → renderView 回到概览态
+  });
+
+  // 面板打开时拉取当前 Active Selection + 本文 Index（U4 概览）
   try {
     chrome.runtime.sendMessage({ type: WCC_MSG.GET_ACTIVE_SELECTION }, function (resp) {
       if (chrome.runtime.lastError) return;
       if (resp && resp.ok && resp.selection && resp.selection.payload) {
         showClaim(resp.selection.payload);
-      } else {
-        renderView();
+        return;
       }
+      // 无选区 → 读本文 Index → 概览态
+      chrome.storage.session.get('docIndex', function (data) {
+        if (data && data.docIndex) {
+          state.docIndex = data.docIndex;
+          state.verified = {};
+        }
+        renderView();
+      });
     });
   } catch (e) { /* context invalidated */ }
 
@@ -421,10 +497,19 @@
   // 双通道（M4 修复）：storage.onChanged 为主（storage 变更在所有扩展上下文可靠触发，
   // 不受"onMessage 处理中再广播"的时序影响）；runtime 广播为辅助。
   chrome.storage.onChanged.addListener(function (changes, area) {
-    if (area !== 'session' || !changes.activeSelection) return;
-    var v = changes.activeSelection.newValue;
-    if (!v || !v.payload || !v.payload.selectedText) { resetToEmpty(); return; }
-    showClaim(v.payload);
+    if (area !== 'session') return;
+    if (changes.activeSelection) {
+      var v = changes.activeSelection.newValue;
+      if (!v || !v.payload || !v.payload.selectedText) { resetToEmpty(); return; }
+      showClaim(v.payload);
+      return;
+    }
+    // 悬浮球 Ready 后 docIndex 更新 → 无选区工作台时切概览（U4）
+    if (changes.docIndex && changes.docIndex.newValue && !state.claimPayload) {
+      state.docIndex = changes.docIndex.newValue;
+      state.verified = {};
+      renderView();
+    }
   });
 
   chrome.runtime.onMessage.addListener(function (message) {

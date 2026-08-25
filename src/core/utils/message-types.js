@@ -11,6 +11,10 @@
     ACTIVE_SELECTION_UPDATED: 'ACTIVE_SELECTION_UPDATED',
     // side panel → background：请求 AI 深读分析（mode: truth/deep/differ）
     ANALYZE: 'ANALYZE',
+    // content script → background：请求对整篇文档做 Claim 识别（V1.5 U1）
+    DETECT_CLAIMS: 'DETECT_CLAIMS',
+    // background → content script：请求提取正文结构（调试/面板刷新用）
+    EXTRACT_DOCUMENT: 'EXTRACT_DOCUMENT',
     // 诊断
     PING: 'PING'
   });

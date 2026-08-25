@@ -85,43 +85,43 @@ PRD 要求 Key 不进前端、必须有 Backend。两个选项：
 
 > 原则：先打通端到端骨架（哪怕求真结果很糙），再逐层加厚。每阶段结束都有可手动验证的产物。
 
-### M0 · 重构对齐 PRD 方向（半天）
+### M0 · 重构对齐 PRD 方向（半天） ✅ 已交付（tag m0-selection-sidepanel）
 - 删除/封存整页采集模块（按 D1 结论）
 - 重写 content script：mouseup/keyup/selectionchange 监听 → 选区 ≥2 字符显示「深读」按钮（getBoundingClientRect 定位、滚动隐藏）
 - background 改为 Active Selection 中转：CAPTURE_SELECTION → storage.session → 广播 ACTIVE_SELECTION_UPDATED；chrome.sidePanel.open()
 - manifest 更新：sidePanel 权限、side_panel 字段、按 D3 调整权限
-- 验收：任意网页选中文字 → 按钮出现 → 点击后 Side Panel 打开并显示选中的那句话
+- 验收：任意网页选中文字 → 按钮出现 → 点击后 Side Panel 打开并显示选中的那句话（E2E PASS）
 - **此阶段完成即 git tag**（符合你的回退习惯）
 
-### M1 · 后端最小可用（半天，依赖 D2/D4 确认）
-- FastAPI 骨架：`POST /analyze`（mode: truth/deep/differ + claim + title + url）
-- LLM 接入 + 三模式 prompt 链路（结构化 JSON 输出）
-- Key 从环境变量/.env 读取，不入库；简单内存缓存（query → 结果，防配额击穿）
-- 验收：curl 打后端能拿到三种模式的合法 JSON
+### M1 · 后端最小可用（半天） ✅ 已交付（tag m1-ai-analyzer，按 D2=B 调整为 SW 直连）
+- SW 内 AI 分析链路：`ANALYZE`（mode: truth/deep/differ + claim + title + url）
+- DeepSeek 接入 + 三模式 prompt 链路（结构化 JSON 输出、缺字段自动重试）
+- Key 从 deepseek_api.key 经 gen-config 注入（gitignored，不入库）；简单内存缓存（query → 结果，防配额击穿）
+- 验收：Node 直连 API + 真实 SW 运行时，三种模式均返回合法 JSON（PASS）
 
-### M2 · Side Panel 三 Tab 工作台（1 天）
+### M2 · Side Panel 三 Tab 工作台（1 天） ✅ 已交付（tag m2-workbench）
 - 布局：当前内容卡（Claim+来源标题）→ 求真/求深/求异 Tab → 结果区
 - 三种结果的 UI：求真=支持程度徽章+证据卡列表+原文↔来源对照块；求深=原理段落+知识树节点+继续探索问题；求异=立场卡片（🟢🟡🔴+文字标注）+认知盲区
 - Loading 分步提示 / Error 可重试 / Empty 引导态
 - 连续深读：Side Panel 开着时新选区自动更新 Claim 并重分析
-- 视觉走你偏好的方向：克制、知识感、轻量可信（PRD 明确不要赛博科技风）；玻璃拟态元素可点缀但以可读性优先
+- 视觉：克制、知识感、轻量可信；Liquid Glass 元素点缀、深色模式支持（prefers-color-scheme）
 
-### M3 · 知乎开放能力接入（半天～1 天，依赖凭证到位）
-- 知乎搜索 / 全网搜索接入求真证据链与求异观点来源（经后端代理+缓存）
-- 直答 Agent 择优接入（视接口形态与配额）
-- 证据来源分层标注：原始来源/权威资料/社区讨论
-- 无凭证时的降级方案：仅 LLM 参数化知识 + 标注"未联网核验"
+### M3 · 知乎开放能力接入（半天～1 天） ✅ 已交付（tag m3-zhihu-pluggable，降级态验证通过）
+- datasource.js：知乎搜索 / 全网搜索 HTTP 客户端（Bearer Access Secret 鉴权）
+- gen-config 支持可选 zhihu_access_secret.key；无凭证自动降级
+- 证据来源分层注入 prompt；UI 显示「已核验/未联网核验」+ 检索来源链接
+- ⏳ 待凭证到位：放置 key 文件 → 重跑 gen-config → 重载扩展即启用（零代码改动）
 
-### M4 · 打磨与验收（半天～1 天）
-- 对照 PRD 验收链路全流程自测：网页→选中→深读→求真→求深→求异→点知识树节点继续探索
-- 边界：过短选区、滚动隐藏、context invalidated 提示、断网 Error 态、SPA 页面
-- 性能：分析请求超时与取消（新 Claim 到达时丢弃旧响应）
-- README/INSTALL 重写为「求真」的交付文档；准备演示脚本（挑好演示用的网页和句子）
+### M4 · 打磨与验收（半天～1 天） ✅ 已交付（tag m4-acceptance）
+- 对照 PRD 验收链路全流程自测：网页→选中→深读→求真→求深→求异→点知识树节点继续探索（6/6 PASS）
+- 边界：过短选区、滚动隐藏、连续深读（storage.onChanged 双通道修复）、Error 态映射
+- 性能：seq 丢弃过期响应（新 Claim 到达时旧响应作废）
+- README/INSTALL 重写为「求真」的交付文档；DEMO.md 演示脚本
 
-### M5 · 加分项（有余力才做）
-- 声明分类路由（声明分类.md 的 10 类 Claim → 不同检索策略；观点类直接提示"无需溯源"——这个很出彩且成本低）
-- 求深知识树节点点击→作为新 Claim 重新三连探索（PRD 的探索循环）
-- 求真证据置信度的"AI 评估非真值"免责说明展示
+### M5 · 加分项（有余力才做） 🟡 部分完成
+- 声明分类路由 ✅（M1 已在 truth prompt 内置：10 类 Claim 分类，观点类提示无需溯源）
+- 求深知识树节点点击→作为新 Claim 重新三连探索 ✅（M4 实现，E2E 验证）
+- 求真证据置信度的"AI 评估非真值"免责说明展示 ✅（footer + 对照块降级文案）
 
 ---
 

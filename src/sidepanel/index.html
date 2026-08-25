@@ -12,25 +12,61 @@
   </header>
 
   <main id="main">
-    <!-- Empty 状态（PRD 05-UI-UX §20）：语义化引导而非"暂无数据" -->
-    <section id="empty-state" class="empty-state">
+    <!-- Empty 状态（PRD 05-UI-UX §20） -->
+    <section id="empty-state" class="empty-state" hidden>
       <div class="empty-icon">✦</div>
       <p class="empty-title">选中网页中的一句话<br />开始深读</p>
       <hr />
       <p class="empty-modes">求真 · 求深 · 求异</p>
     </section>
 
-    <!-- Claim 卡片：当前正在分析的内容 -->
-    <section id="claim-card" class="claim-card" hidden>
+    <!-- Claim 卡片 -->
+    <section id="claim-card" class="claim-card glass" hidden>
       <div class="claim-label">当前内容</div>
       <blockquote id="claim-text" class="claim-text"></blockquote>
-      <div class="claim-source">
-        <span id="claim-source-title"></span>
-      </div>
       <button id="claim-expand" class="claim-expand" hidden>展开全文</button>
+      <div id="claim-source-title" class="claim-source"></div>
     </section>
 
-    <div id="debug-msgs" class="debug-msgs"></div>
+    <!-- 模式导航（PRD 05-UI-UX §8）：默认求真 -->
+    <nav id="mode-tabs" class="mode-tabs glass" hidden>
+      <button class="tab active" data-mode="truth" aria-selected="true">
+        <span class="tab-name">求真</span><span class="tab-q">靠谱吗</span>
+      </button>
+      <button class="tab" data-mode="deep" aria-selected="false">
+        <span class="tab-name">求深</span><span class="tab-q">是什么</span>
+      </button>
+      <button class="tab" data-mode="differ" aria-selected="false">
+        <span class="tab-name">求异</span><span class="tab-q">别看法</span>
+      </button>
+    </nav>
+
+    <!-- Loading 分步提示（PRD 05-UI-UX §18） -->
+    <section id="loading-state" class="state-card glass" hidden>
+      <div id="loading-title" class="loading-title">正在分析……</div>
+      <ul id="loading-steps" class="loading-steps"></ul>
+    </section>
+
+    <!-- Error 状态（PRD 05-UI-UX §19）：可重试，不空白 -->
+    <section id="error-state" class="state-card glass error" hidden>
+      <div class="error-icon">⚠</div>
+      <div id="error-title" class="error-title">分析失败</div>
+      <div id="error-detail" class="error-detail">暂时无法完成深读。</div>
+      <button id="retry-btn" class="retry-btn btn-ai">重新分析</button>
+    </section>
+
+    <!-- 结果区 -->
+    <section id="result-state" hidden>
+      <div id="result-truth" class="result-pane" hidden></div>
+      <div id="result-deep" class="result-pane" hidden></div>
+      <div id="result-differ" class="result-pane" hidden></div>
+      <button id="regen-btn" class="regen-btn" hidden>↻ 重新生成本视图</button>
+    </section>
+
+    <footer class="panel-foot" hidden>
+      <span id="cache-flag" class="cache-flag"></span>
+      <span class="disclaim">AI 基于检索与知识评估，非事实真值</span>
+    </footer>
   </main>
 
   <script src="../core/utils/message-types.js"></script>

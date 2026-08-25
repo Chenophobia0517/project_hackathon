@@ -1,0 +1,160 @@
+// 「求真」悬浮球（V1.5 U2）：页面右下角低干扰入口。
+// 状态机：Idle → Analyzing → Ready / Error。点击才读取正文（v1.5_UPGRADE §8 隐私红线）。
+// Idle：不读取任何内容；Analyzing：本地提取+SW Claim 识别；Ready：可再次点击（进入面板/概览）。
+(function () {
+  'use strict';
+
+  if (window.__QIUZHEN_ORB_READY__) return; // 防重复注入
+  window.__QIUZHEN_ORB_READY__ = true;
+
+  var STATE = { IDLE: 'idle', ANALYZING: 'analyzing', READY: 'ready', ERROR: 'error' };
+  var state = STATE.IDLE;
+  var lastIndex = null; // 最近一次 Claim Index（本地保留，U3 Hover 用）
+
+  var orb = null;
+  var badge = null;
+  var spin = null;
+  var label = null;
+
+  // ---------- DOM ----------
+
+  function ensureOrb() {
+    if (orb) return orb;
+    orb = document.createElement('div');
+    orb.id = 'qiuzhen-orb';
+    orb.setAttribute('role', 'button');
+    orb.setAttribute('aria-label', '求真：分析本文可验证声明');
+    orb.title = '求真 · 分析本文声明';
+    orb.style.cssText = [
+      'position: fixed', 'right: 18px', 'bottom: 18px', 'z-index: 2147483646',
+      'width: 42px', 'height: 42px', 'border-radius: 50%',
+      'display: flex', 'align-items: center', 'justify-content: center',
+      'cursor: pointer', 'user-select: none',
+      'font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif',
+      'font-size: 16px', 'font-weight: 700', 'color: #4f6ef7',
+      'background: rgba(250,250,253,.72)',
+      'backdrop-filter: blur(10px)', '-webkit-backdrop-filter: blur(10px)',
+      'border: 1px solid rgba(255,255,255,.8)',
+      'box-shadow: 0 4px 18px rgba(30,40,80,.16)',
+      'transition: transform .25s ease, box-shadow .25s ease, opacity .25s ease',
+      'opacity: .55'
+    ].join(';');
+
+    // 标签（唯一文本载体，避免 textContent 赋值清掉兄弟节点）
+    label = document.createElement('span');
+    label.textContent = '求';
+    label.style.cssText = 'position: relative; z-index: 1; line-height: 1;';
+    orb.appendChild(label);
+
+    badge = document.createElement('div');
+    badge.style.cssText = [
+      'position: absolute', 'top: -6px', 'right: -8px',
+      'min-width: 18px', 'height: 18px', 'padding: 0 5px',
+      'border-radius: 999px', 'background: #2f9e63', 'color: #fff',
+      'font-size: 11px', 'font-weight: 700', 'line-height: 18px',
+      'text-align: center', 'display: none', 'box-sizing: border-box',
+      'z-index: 2'
+    ].join(';');
+    orb.appendChild(badge);
+
+    spin = document.createElement('div');
+    spin.style.cssText = [
+      'position: absolute', 'inset: 0', 'border-radius: 50%',
+      'border: 2px solid rgba(79,110,247,.18)', 'border-top-color: #4f6ef7',
+      'display: none', 'animation: qiuzhen-spin .8s linear infinite'
+    ].join(';');
+    orb.appendChild(spin);
+
+    // 动画 keyframes 注入一次
+    if (!document.getElementById('qiuzhen-spin-style')) {
+      var st = document.createElement('style');
+      st.id = 'qiuzhen-spin-style';
+      st.textContent = '@keyframes qiuzhen-spin { to { transform: rotate(360deg); } }';
+      document.documentElement.appendChild(st);
+    }
+
+    orb.addEventListener('mouseenter', function () { orb.style.opacity = '1'; orb.style.transform = 'scale(1.08)'; });
+    orb.addEventListener('mouseleave', function () { if (state !== STATE.ANALYZING) orb.style.transform = 'scale(1)'; });
+    orb.addEventListener('click', onOrbClick);
+    document.documentElement.appendChild(orb);
+    return orb;
+  }
+
+  // ---------- 状态机 ----------
+
+  function setState(s, detail) {
+    state = s;
+    if (!orb) ensureOrb();
+    spin.style.display = s === STATE.ANALYZING ? 'block' : 'none';
+    orb.style.transform = s === STATE.ANALYZING ? 'scale(1)' : 'scale(1)';
+    orb.title = s === STATE.IDLE ? '求真 · 分析本文声明'
+      : s === STATE.ANALYZING ? '正在分析本文…'
+      : s === STATE.READY ? '发现 ' + (detail || 0) + ' 个可验证声明，点击查看'
+      : '分析失败，点击重试';
+
+    if (s === STATE.READY) {
+      orb.style.background = 'rgba(240,255,248,.86)';
+      orb.style.borderColor = 'rgba(47,158,99,.5)';
+      orb.style.color = '#1e7a47';
+      label.textContent = '求';
+      badge.textContent = String(detail || 0);
+      badge.style.display = 'block';
+    } else if (s === STATE.ERROR) {
+      orb.style.background = 'rgba(255,244,242,.86)';
+      orb.style.borderColor = 'rgba(207,75,60,.5)';
+      orb.style.color = '#cf4b3c';
+      label.textContent = '!';
+      badge.style.display = 'none';
+    } else {
+      orb.style.background = 'rgba(250,250,253,.72)';
+      orb.style.borderColor = 'rgba(255,255,255,.8)';
+      orb.style.color = '#4f6ef7';
+      label.textContent = '求';
+      badge.style.display = 'none';
+    }
+    if (s === STATE.IDLE) orb.style.opacity = '0.55'; else orb.style.opacity = '1';
+  }
+
+  // ---------- 分析流程 ----------
+
+  function analyze() {
+    setState(STATE.ANALYZING);
+    var doc;
+    try {
+      doc = window.__QIUZHEN_EXTRACTOR__.extractDocument();
+    } catch (e) {
+      setState(STATE.ERROR);
+      return;
+    }
+    try {
+      chrome.runtime.sendMessage({ type: WCC_MSG.DETECT_CLAIMS, document: doc }, function (resp) {
+        if (chrome.runtime.lastError || !resp || !resp.ok) { setState(STATE.ERROR); return; }
+        lastIndex = resp.index;
+        setState(STATE.READY, (resp.index.claims || []).length);
+      });
+    } catch (e) {
+      setState(STATE.ERROR); // extension context invalidated
+    }
+  }
+
+  function onOrbClick() {
+    if (state === STATE.ANALYZING) return;
+    if (state === STATE.READY) {
+      // 已分析：打开 Side Panel（U4 将在此进入「本文概览」态）
+      try {
+        chrome.runtime.sendMessage({ type: WCC_MSG.OPEN_PANEL_FOR_DOCUMENT, index: lastIndex, docUrl: location.href, docTitle: document.title || '' }, function () {});
+      } catch (e) { /* context invalidated */ }
+      return;
+    }
+    analyze(); // idle / error → 重新分析（缓存命中时 SW 秒回）
+  }
+
+  // ---------- 对外（U3 Hover 用） ----------
+
+  window.__QIUZHEN_ORB__ = {
+    getIndex: function () { return lastIndex; },
+    setState: setState
+  };
+
+  ensureOrb(); // 注入即显示 Idle 悬浮球
+})();

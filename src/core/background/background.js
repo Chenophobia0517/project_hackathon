@@ -122,6 +122,25 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       );
       return true; // 异步响应
 
+    case WCC_MSG.OPEN_PANEL_FOR_DOCUMENT:
+      // U2/U4：悬浮球 Ready 点击 → 保存本文 Claim Index（面板概览态读取）+ 打开面板
+      if (message.index && message.index.claims) {
+        try {
+          chrome.storage.session.set({
+            docIndex: {
+              url: message.docUrl,
+              title: message.docTitle,
+              index: message.index,
+              at: Date.now()
+            }
+          });
+        } catch (e) { /* 忽略 */ }
+      }
+      chrome.sidePanel.open({ windowId: sender && sender.tab ? sender.tab.windowId : undefined })
+        .then(function () { sendResponse({ ok: true, panelOpened: true }); })
+        .catch(function () { sendResponse({ ok: true, panelOpened: false }); });
+      return true; // 异步响应
+
     case WCC_MSG.PING:
       sendResponse({ ok: true, pong: true, at: Date.now() });
       return false;

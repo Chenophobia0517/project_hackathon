@@ -16,6 +16,7 @@
       "js": [
         "src/core/utils/message-types.js",
         "src/core/content-script/extractor.js",
+        "src/core/content-script/orb.js",
         "src/core/content-script/content.js"
       ]
     }

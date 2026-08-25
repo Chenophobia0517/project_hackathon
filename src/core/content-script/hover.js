@@ -12,7 +12,8 @@
   var marks = [];          // 已打标的 span（清理用）
   var host = null;         // 提示卡 Shadow DOM 宿主
   var shadow = null;
-  var tooltipTimer = null;
+  var hideTimer = null;    // 延迟隐藏（O1：给鼠标留出移动到卡片的时间）
+  var lastHoverClaimId = null;
 
   // ---------- 样式注入（页面内高亮，仅装饰不改文字） ----------
 
@@ -83,6 +84,7 @@
 
   function deactivate() {
     document.removeEventListener('mouseover', onMouseOver, true);
+    cancelHide();
     marks.forEach(function (m) {
       var parent = m.parentNode;
       if (parent) {
@@ -114,7 +116,10 @@
       '  box-shadow: 0 10px 32px rgba(30,40,80,.22);',
       '  color: #20263a; font-size: 12.5px; line-height: 1.6;',
       '  pointer-events: auto;',
+      '  opacity: 1; transform: translateY(0);',
+      '  transition: opacity .18s ease, transform .18s ease;',
       '}',
+      '.tip.hiding { opacity: 0; transform: translateY(4px); }',
       '.badge { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; color: #8a6d1a; border: 1px solid #d9b84a; background: rgba(217,184,74,.14); margin-bottom: 6px; }',
       '.text { margin: 4px 0 8px; }',
       '.btns { display: flex; gap: 8px; }',
@@ -127,6 +132,9 @@
       '  <div class="btns"><button class="btn" data-mode="truth">求真</button><button class="btn" data-mode="deep">求深</button><button class="btn" data-mode="differ">求异</button></div>',
       '</div>'
     ].join('');
+    // O1：卡片自身 hover 保护——进入卡片取消延迟隐藏，离开卡片再延迟
+    shadow.querySelector('.tip').addEventListener('mouseenter', cancelHide);
+    shadow.querySelector('.tip').addEventListener('mouseleave', function () { scheduleHide(250); });
     shadow.querySelectorAll('.btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var claim = claimById[host.dataset.claimId];
@@ -149,49 +157,65 @@
     document.documentElement.appendChild(host);
   }
 
-  function showTooltip(claim, x, y) {
-    ensureHost();
-    host.dataset.claimId = claim.id;
-    shadow.querySelector('.text').textContent = claim.text;
-    host.style.display = 'block';
-    host.style.pointerEvents = 'none';
-    // 定位：右下偏移，视口边缘翻转
-    var w = 320, h = 160;
-    var left = x + 14, top = y + 16;
-    if (left + w > window.innerWidth - 8) left = x - w - 14;
-    if (top + h > window.innerHeight - 8) top = y - h - 16;
-    host.style.left = Math.max(8, left) + 'px';
-    host.style.top = Math.max(8, top) + 'px';
-    host.style.pointerEvents = 'auto';
+  // O1：延迟隐藏——鼠标离开句子后给 ~300ms 移动窗口，期间进入卡片即取消
+  function scheduleHide(delay) {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(function () { hideTooltip(); }, delay || 300);
+  }
+
+  function cancelHide() {
+    clearTimeout(hideTimer);
   }
 
   function hideTooltip() {
-    if (!host) return;
-    host.style.display = 'none';
+    if (!host || host.style.display === 'none') return;
+    var tip = shadow.querySelector('.tip');
+    tip.classList.add('hiding'); // 淡出动画
+    clearTimeout(host._hideDone);
+    host._hideDone = setTimeout(function () {
+      host.style.display = 'none';
+      tip.classList.remove('hiding');
+    }, 200); // 与 transition 时长一致
+  }
+
+  function showTooltip(claim, x, y) {
+    ensureHost();
+    cancelHide();
+    var isNewClaim = host.dataset.lastClaim !== claim.id;
+    host.dataset.claimId = claim.id;
+    host.dataset.lastClaim = claim.id;
+    shadow.querySelector('.text').textContent = claim.text;
+    if (isNewClaim) {
+      // 新句：定位一次；同句内移动不跟随（避免卡片追着鼠标跑，用户无法点击）
+      var w = 320, h = 160;
+      var left = x + 14, top = y + 16;
+      if (left + w > window.innerWidth - 8) left = x - w - 14;
+      if (top + h > window.innerHeight - 8) top = y - h - 16;
+      host.style.left = Math.max(8, left) + 'px';
+      host.style.top = Math.max(8, top) + 'px';
+    }
+    host.style.display = 'block';
+    void host.offsetWidth; // 强制 reflow 使 transition 生效
+    shadow.querySelector('.tip').classList.remove('hiding'); // 淡入
   }
 
   // ---------- 委托 ----------
 
-  var lastHoverClaimId = null;
-
   function onMouseOver(e) {
     var target = e.target;
     if (!(target instanceof Element)) return;
-    if (host && host.contains && target.closest && host.contains(target)) return; // 提示卡内部
+    // O1 根因修复：Element.contains 不穿透 Shadow DOM——卡片内部 hover 必须识别为"在卡片上"
+    var insideHost = host && (host.contains(target) || (host.shadowRoot && host.shadowRoot.contains(target)));
+    if (insideHost) { cancelHide(); return; }
     var span = target.closest ? target.closest('.qiuzhen-claim') : null;
     if (!span) {
-      if (lastHoverClaimId) { lastHoverClaimId = null; hideTooltip(); }
+      if (lastHoverClaimId) scheduleHide(300); // 离开句子：延迟隐藏，留出移动到卡片的时间
       return;
     }
     var claim = claimById[span.dataset.claimId];
-    if (!claim) { hideTooltip(); return; }
-    if (lastHoverClaimId !== claim.id) {
-      lastHoverClaimId = claim.id;
-      showTooltip(claim, e.clientX, e.clientY);
-    } else {
-      // 同句移动：跟随
-      showTooltip(claim, e.clientX, e.clientY);
-    }
+    if (!claim) { scheduleHide(300); return; }
+    lastHoverClaimId = claim.id;
+    showTooltip(claim, e.clientX, e.clientY);
   }
 
   window.__QIUZHEN_HOVER__ = {

@@ -27,12 +27,12 @@
     orb.setAttribute('aria-label', '求真：分析本文可验证声明');
     orb.title = '求真 · 分析本文声明';
     orb.style.cssText = [
-      'position: fixed', 'right: 18px', 'bottom: 18px', 'z-index: 2147483646',
-      'width: 42px', 'height: 42px', 'border-radius: 50%',
+      'position: fixed', 'left: 18px', 'top: 18px', 'z-index: 2147483646', // O2：左上角
+      'width: 84px', 'height: 84px', 'border-radius: 50%', 'box-sizing: border-box', // O2：42px → 84px
       'display: flex', 'align-items: center', 'justify-content: center',
       'cursor: pointer', 'user-select: none',
       'font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif',
-      'font-size: 16px', 'font-weight: 700', 'color: #4f6ef7',
+      'font-size: 30px', 'font-weight: 700', 'color: #4f6ef7',            // O2：16px → 30px
       'background: rgba(250,250,253,.72)',
       'backdrop-filter: blur(10px)', '-webkit-backdrop-filter: blur(10px)',
       'border: 1px solid rgba(255,255,255,.8)',
@@ -49,10 +49,10 @@
 
     badge = document.createElement('div');
     badge.style.cssText = [
-      'position: absolute', 'top: -6px', 'right: -8px',
-      'min-width: 18px', 'height: 18px', 'padding: 0 5px',
+      'position: absolute', 'top: -6px', 'right: -6px',                 // O2：徽标同步放大
+      'min-width: 26px', 'height: 26px', 'padding: 0 7px',
       'border-radius: 999px', 'background: #2f9e63', 'color: #fff',
-      'font-size: 11px', 'font-weight: 700', 'line-height: 18px',
+      'font-size: 14px', 'font-weight: 700', 'line-height: 26px',
       'text-align: center', 'display: none', 'box-sizing: border-box',
       'z-index: 2'
     ].join(';');

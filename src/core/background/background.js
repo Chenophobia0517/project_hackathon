@@ -1,6 +1,6 @@
 // Background Service Worker：Active Selection 的唯一中转与持久点（MV3，无独立后端——D2=B）。
 // 职责（PRD 06-技术架构 §4）：接收 CAPTURE_SELECTION → 存 storage.session → 广播/打开 Side Panel。
-importScripts('../generated-config.js', '../utils/message-types.js', '../ai/datasource.js', '../ai/analyzer.js');
+importScripts('../generated-config.js', '../utils/message-types.js', '../ai/datasource.js', '../ai/analyzer.js', '../ai/claim-detector.js');
 
 // ---------- Active Selection 状态 ----------
 
@@ -102,6 +102,22 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
         },
         function (err) {
           sendResponse({ ok: false, reason: String(err && err.message || 'analyze_failed') });
+        }
+      );
+      return true; // 异步响应
+
+    case WCC_MSG.DETECT_CLAIMS:
+      // V1.5 U1：全文 Claim 识别（发现+分类+定位，不验证不搜索）
+      if (!message.document || !Array.isArray(message.document.sentences)) {
+        sendResponse({ ok: false, reason: 'bad_document' });
+        return false;
+      }
+      WCC_CLAIM_DETECTOR.detectClaims(message.document).then(
+        function (res) {
+          sendResponse({ ok: true, index: { claims: res.claims, analyzed: res.analyzed, truncated: res.truncated }, cached: res.cached });
+        },
+        function (err) {
+          sendResponse({ ok: false, reason: String(err && err.message || 'detect_failed') });
         }
       );
       return true; // 异步响应

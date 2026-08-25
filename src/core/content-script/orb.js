@@ -27,7 +27,7 @@
     orb.setAttribute('aria-label', '求真：分析本文可验证声明');
     orb.title = '求真 · 分析本文声明';
     orb.style.cssText = [
-      'position: fixed', 'left: 18px', 'top: 18px', 'z-index: 2147483646', // O2：左上角
+      'position: fixed', 'right: 18px', 'top: 18px', 'z-index: 2147483646', // 右上角
       'width: 84px', 'height: 84px', 'border-radius: 50%', 'box-sizing: border-box', // O2：42px → 84px
       'display: flex', 'align-items: center', 'justify-content: center',
       'cursor: pointer', 'user-select: none',
@@ -49,7 +49,7 @@
 
     badge = document.createElement('div');
     badge.style.cssText = [
-      'position: absolute', 'top: -6px', 'right: -6px',                 // O2：徽标同步放大
+      'position: absolute', 'top: -6px', 'left: -6px',                  // 徽标在左上（orb 居右上角时不溢出视口）
       'min-width: 26px', 'height: 26px', 'padding: 0 7px',
       'border-radius: 999px', 'background: #2f9e63', 'color: #fff',
       'font-size: 14px', 'font-weight: 700', 'line-height: 26px',

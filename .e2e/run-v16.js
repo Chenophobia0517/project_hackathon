@@ -23,14 +23,14 @@ const tipState = (page) => page.evaluate(() => {
   const R = [];
   const check = (name, ok, extra) => { R.push(ok); console.log((ok ? 'PASS' : 'FAIL') + ' ' + name + (extra !== undefined ? ' | ' + extra : '')); };
 
-  // O2 悬浮球：84x84 左上角、字号放大
+  // O2 悬浮球：84x84 右上角、字号放大
   const orb = await page.evaluate(() => {
     const o = document.querySelector('#qiuzhen-orb');
     const r = o.getBoundingClientRect();
-    return { w: Math.round(r.width), h: Math.round(r.height), left: Math.round(r.left), top: Math.round(r.top), fs: getComputedStyle(o).fontSize };
+    return { w: Math.round(r.width), h: Math.round(r.height), left: Math.round(r.left), right: Math.round(window.innerWidth - r.right), top: Math.round(r.top), fs: getComputedStyle(o).fontSize };
   });
   check('O2 orb 84x84', orb.w === 84 && orb.h === 84, orb.w + 'x' + orb.h);
-  check('O2 orb 左上角', orb.left <= 20 && orb.top <= 20, orb.left + ',' + orb.top);
+  check('O2 orb 右上角', orb.right <= 40 && orb.top <= 20, 'right=' + orb.right + ',top=' + orb.top + '（right 含 ~15px 滚动条，CSS right:18px 相对内容区）');
   check('O2 字号>=24', parseFloat(orb.fs) >= 24, orb.fs);
 
   // 激活 hover 层（悬浮球点击 → Ready）

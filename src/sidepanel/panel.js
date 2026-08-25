@@ -222,6 +222,19 @@
     pane.appendChild(c3);
   }
 
+  // ---------- 探索循环（PRD 04 §8 / 05 §14.3）：知识节点点击 → 成为新 Claim 重新三连探索 ----------
+
+  function exploreNode(text) {
+    var t = String(text || '').trim();
+    if (!t || !state.claimPayload) return;
+    showClaim({
+      title: String(state.claimPayload.title || '').replace(/ · 知识探索$/, '') + ' · 知识探索',
+      url: state.claimPayload.url,
+      selectedText: t,
+      capturedAt: new Date().toISOString()
+    });
+  }
+
   function renderDeep(result) {
     var pane = els.panes.deep;
     pane.innerHTML = '';
@@ -250,7 +263,10 @@
         branch.appendChild(el('div', 'tree-label', esc(br.label)));
         var nodesWrap = el('div', 'tree-nodes');
         (Array.isArray(br.nodes) ? br.nodes : []).forEach(function (n) {
-          nodesWrap.appendChild(el('span', 'node-chip', esc(n)));
+          var chip = el('span', 'node-chip', esc(n));
+          chip.title = '以此节点继续深读';
+          chip.addEventListener('click', function () { exploreNode(n); });
+          nodesWrap.appendChild(chip);
         });
         branch.appendChild(nodesWrap);
         c3.appendChild(branch);
@@ -401,7 +417,16 @@
     });
   } catch (e) { /* context invalidated */ }
 
-  // 连续深读：面板开着时新选区实时更新并重分析
+  // 连续深读：面板开着时新选区实时更新并重分析。
+  // 双通道（M4 修复）：storage.onChanged 为主（storage 变更在所有扩展上下文可靠触发，
+  // 不受"onMessage 处理中再广播"的时序影响）；runtime 广播为辅助。
+  chrome.storage.onChanged.addListener(function (changes, area) {
+    if (area !== 'session' || !changes.activeSelection) return;
+    var v = changes.activeSelection.newValue;
+    if (!v || !v.payload || !v.payload.selectedText) { resetToEmpty(); return; }
+    showClaim(v.payload);
+  });
+
   chrome.runtime.onMessage.addListener(function (message) {
     if (!message || message.type !== WCC_MSG.ACTIVE_SELECTION_UPDATED) return;
     if (!message.payload || !message.payload.selectedText) { resetToEmpty(); return; }

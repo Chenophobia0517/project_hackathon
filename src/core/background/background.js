@@ -62,7 +62,9 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
         return false;
       }
       saveSelection(message.payload, sender);
-      // PRD 06-技术架构 §8：先存后开；面板已打开时 open 失败 → 走广播更新
+      // PRD 06-技术架构 §8：先存后开。
+      // 面板已打开 → 广播实时更新；面板未打开 → open 后由 GET_ACTIVE_SELECTION 拉取。
+      notifyPanel();
       openSidePanel(sender && sender.tab ? sender.tab.id : null, sendResponse);
       return true; // 异步响应（等 sidePanel.open 结果）
 

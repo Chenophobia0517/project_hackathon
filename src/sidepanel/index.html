@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>深读</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <header class="panel-header">
+    <span class="brand">深读</span>
+    <span class="brand-sub">求真 · 求深 · 求异</span>
+  </header>
+
+  <main id="main">
+    <!-- Empty 状态（PRD 05-UI-UX §20）：语义化引导而非"暂无数据" -->
+    <section id="empty-state" class="empty-state">
+      <div class="empty-icon">✦</div>
+      <p class="empty-title">选中网页中的一句话<br />开始深读</p>
+      <hr />
+      <p class="empty-modes">求真 · 求深 · 求异</p>
+    </section>
+
+    <!-- Claim 卡片：当前正在分析的内容 -->
+    <section id="claim-card" class="claim-card" hidden>
+      <div class="claim-label">当前内容</div>
+      <blockquote id="claim-text" class="claim-text"></blockquote>
+      <div class="claim-source">
+        <span id="claim-source-title"></span>
+      </div>
+      <button id="claim-expand" class="claim-expand" hidden>展开全文</button>
+    </section>
+
+    <div id="debug-msgs" class="debug-msgs"></div>
+  </main>
+
+  <script src="../core/utils/message-types.js"></script>
+  <script src="panel.js"></script>
+</body>
+</html>

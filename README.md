@@ -1,87 +1,59 @@
-# Web Context Capture（网页阅读上下文捕获模块）
+# 求真 · 深读
 
-基于 Chrome Extension Manifest V3 的网页阅读上下文捕获模块，作为未来 AI 信息验证系统的基础数据入口。
+基于 Chrome Extension（Manifest V3）的 AI 深度阅读插件：
 
-## 1. 环境安装
+> 在你正在阅读的任何网页上，从一句话出发——**验证它、理解它，并发现你可能遗漏的观点。**
 
-- **Node 环境**（必需，仅用于构建脚本）：Node.js ≥ 16.7
-  - 验证：`node -v`
-- **Python 环境**（可选，仅用于本地测试页面静态服务）：Python 3.x
-  - 验证：`python --version`
-- **依赖安装**：本项目零第三方依赖，无需 npm install。
-
-## 2. 构建
-
-```bash
-node scripts/build.js dev    # 开发版：Core + Debug + Test → build/dev/
-node scripts/build.js prod   # 生产版：仅 Core → build/prod/
+```text
+阅读网页 → 选中一句话 → 点击「深读」→ Side Panel 打开
+                                      ├─ 求真：这句话靠谱吗？（证据核对）
+                                      ├─ 求深：背后是什么？（原理与知识树）
+                                      └─ 求异：还有别的看法吗？（观点与盲区）
 ```
 
-## 3. Chrome Extension 加载方式
+纯静态扩展，零第三方依赖，无构建步骤。加载即用，详见 [INSTALL.md](INSTALL.md)。
 
-1. 打开 Chrome 扩展页面：地址栏输入 `chrome://extensions`
-2. 右上角开启 **开发者模式**
-3. 点击 **加载已解压扩展**
-4. 选择 **开发版本目录 `build/dev`**（生产则选 `build/prod`）
+## 产品原则
 
-## 4. Debug 启动方式
+1. **不改造网页本身**：无操作时插件几乎不存在。
+2. **用户主动触发**：只分析用户选中的那一句，不默认采集整页内容。
+3. **不是聊天机器人**：结构化结果，围绕 Claim 展开。
 
-1. 加载 `build/dev` 后，点击浏览器工具栏中的扩展图标 → 自动打开 **Debug Side Panel**
-2. Panel 中可查看：
-   - Extension / Content Script / Background 状态
-   - 当前页面 Title、URL、Captured Time
-   - Total / Visible Paragraph Count
-   - 当前 viewport 中的实时文本（含 top/bottom）
-   - 数据通信日志（Content Script → Background → Storage 链路）
+## 隐私
 
-## 5. 测试页面启动方式
+> 我们不读你的网页，只读你主动问的那一句。
 
-```bash
-# 在项目根目录执行
-python -m http.server 8000
-```
+仅当用户选中文本并点击「深读」后，才会把该句文本、页面标题与 URL 提交给分析服务；不采集整页内容，不上报浏览历史。
 
-浏览器访问：**http://localhost:8000/src/test/test-page/test-page.html**
+## 权限说明
 
-测试页面包含：页面标题、55+ 段落长文、多个数字声明、可滚动内容、点击按钮动态加载、3 秒后自动追加内容。
+| 权限 | 用途 |
+|---|---|
+| `storage` | 会话级保存当前 Active Selection（`chrome.storage.session`） |
+| `sidePanel` | 打开深读侧栏 |
+| `<all_urls>`（content_scripts） | 让「深读」按钮在任意网页可用；脚本只监听选择事件，不读取页面内容 |
 
-打开页面后按 F12 → Console 可查看 `[WCC Test Runner]` 自检结果。
-
-## 6. 验收标准对照
-
-| 测试 | 操作 | 预期 |
-|---|---|---|
-| 测试1 | 打开测试页面 | Debug Panel 显示标题、URL、文本数量 |
-| 测试2 | 滚动页面 | Visible Paragraph 实时变化 |
-| 测试3 | 查看通信日志 | Content Script → Background → Storage 完整链路 |
-| 测试4 | 删除 `src/debug/` `src/test/` 后重新 `node scripts/build.js prod` | Core 仍正常运行 |
-
-## 7. 目录结构
+## 目录结构
 
 ```
-web-context-capture/
-├── manifest/            # dev/prod 双 manifest
-├── src/
-│   ├── core/            # 核心（可独立运行）
-│   │   ├── content-script/
-│   │   ├── background/
-│   │   ├── context-parser/
-│   │   └── utils/
-│   ├── debug/           # 仅 dev：Side Panel / logger / inspector
-│   └── test/            # 仅 dev：测试页面 / mock / 自检脚本
-├── scripts/build.js     # 构建脚本
-├── build/               # 构建产物（加载扩展选这里）
-└── README.md
+project_hackathon/
+├── manifest.json            # MV3 manifest（位于扩展根 = 仓库根，Chrome 要求）
+├── src/core/
+│   ├── content-script/      # 页面注入：选区捕获、「深读」按钮
+│   ├── background/          # Service Worker：Active Selection 中转、Side Panel 控制
+│   └── utils/               # 消息类型常量
+├── src/sidepanel/           # 深读工作台（三 Tab：求真 / 求深 / 求异）
+├── .e2e/                    # 本地端到端验证脚本（开发用，见目录内注释）
+└── zhihu-skill/             # 知乎开放平台 Skill 资源包（黑客松提供，非扩展运行依赖）
 ```
 
-**依赖方向**：Test → Debug → Core（单向）。Core 不感知 Debug / Test 的存在。
-
-## 8. 数据流
+## 数据流
 
 ```
-Browser Page → Content Script → chrome.runtime.sendMessage(PAGE_CONTEXT_UPDATED)
-→ Background Service Worker → chrome.storage.session + 内存变量
-→ Debug Side Panel（dev） / 未来 AI 模块
+Web Page ──选区──▶ Content Script ──CAPTURE_SELECTION──▶ Background Service Worker
+                                                            │ chrome.storage.session
+                                                            ▼
+                                              ACTIVE_SELECTION_UPDATED / GET_ACTIVE_SELECTION
+                                                            ▼
+                                                      Side Panel 工作台
 ```
-
-查询接口：向 Background 发送 `{ type: "GET_CURRENT_CONTEXT" }`，返回最近一次页面上下文。

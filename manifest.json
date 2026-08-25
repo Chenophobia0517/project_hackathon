@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "求真 · 深读",
+  "version": "0.2.0",
+  "description": "在正在阅读的网页上选中一句话，验证它、理解它，并发现你可能遗漏的观点。",
+  "permissions": ["storage", "sidePanel"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/core/background/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "js": [
+        "src/core/utils/message-types.js",
+        "src/core/content-script/content.js"
+      ]
+    }
+  ],
+  "action": {
+    "default_title": "深读当前选中内容"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  }
+}

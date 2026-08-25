@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>深读测试页</title></head>
+<body style="max-width:640px;margin:40px auto;font-family:sans-serif;line-height:1.9">
+  <h1>「求真」M0 端到端测试页</h1>
+  <p id="p1">人工智能正在深刻改变软件开发的方式，程序员的核心工作将从编写代码转变为设计系统与审查 AI 生成的结果。</p>
+  <p id="p2">研究表明，适量饮用咖啡可能与部分健康指标的改善存在相关性。</p>
+  <!-- 填充段落：让页面超过一屏，使滚动隐藏按钮的用例可真实触发 -->
+  <script>
+    for (let i = 3; i <= 30; i++) {
+      const p = document.createElement('p');
+      p.id = 'filler-' + i;
+      p.textContent = '填充段落 ' + i + '：这是一段用于撑起页面高度的示例文字，模拟真实文章的滚动场景。';
+      document.body.appendChild(p);
+    }
+  </script>
+</body>
+</html>

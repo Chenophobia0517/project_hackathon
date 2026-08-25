@@ -125,6 +125,15 @@ PRD 要求 Key 不进前端、必须有 Backend。两个选项：
 - 求深知识树节点点击→作为新 Claim 重新三连探索 ✅（M4 实现，E2E 验证）
 - 求真证据置信度的"AI 评估非真值"免责说明展示 ✅（footer + 对照块降级文案）
 
+### V1.5 · 系统主动发现 Claim（依据 v1.5_UPGRADE.md） ✅ 已交付（tags u0~u4，tag v1.5 收尾）
+- U0 正文提取与结构化 ✅（extractor.js：章节/段落/句子+offset，nav/footer 过滤，验证 7/7）
+- U1 Claim Detection 管线 ✅（claim-detector.js：三分类+类型子类，缓存，双层验证 PASS）
+- U2 悬浮球状态机 ✅（orb.js：Idle→Analyzing→Ready/Error，隐私：点击才读正文，缓存秒回 329ms）
+- U3 Hover 声明交互 ✅（hover.js：打标+Shadow DOM 提示卡+复用 CAPTURE_SELECTION，验证 5/5）
+- U4 本文概览态 ✅（panel.js：声明/观点统计+列表+已核实徽章+返回入口，验证 7/7）
+- U5 回归验收 ✅（V1 全链路 8 项 + V1.5 链路 5 项 = 13/13 PASS；DEMO/README 更新）
+- 修复：悬浮球入口清空旧 ActiveSelection（本文模式应显示概览而非旧选区，VD3）
+
 ---
 
 ## 五、风险与应对

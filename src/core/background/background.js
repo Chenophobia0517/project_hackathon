@@ -123,7 +123,10 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       return true; // 异步响应
 
     case WCC_MSG.OPEN_PANEL_FOR_DOCUMENT:
-      // U2/U4：悬浮球 Ready 点击 → 保存本文 Claim Index（面板概览态读取）+ 打开面板
+      // U2/U4：悬浮球 Ready 点击 → 保存本文 Claim Index（面板概览态读取）+ 打开面板。
+      // 同时清空 Active Selection：悬浮球入口是「本文模式」，面板应显示概览而非旧选区（VD3）。
+      latestSelection = null;
+      try { chrome.storage.session.remove('activeSelection'); } catch (e) { /* 忽略 */ }
       if (message.index && message.index.claims) {
         try {
           chrome.storage.session.set({

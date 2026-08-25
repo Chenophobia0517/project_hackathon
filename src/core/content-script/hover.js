@@ -1,0 +1,201 @@
+// Hover 声明交互（V1.5 U3）：Claim Index → 句子打标 → 悬浮提示卡 → 复用现有分析链路。
+// 原则（v1.5_UPGRADE §2.5/§10）：不改原文文字；轻微高亮（虚线下划线+Hover 浅色底，VD2）；
+// 非 Claim 文本 Hover 零处理；提示卡 Shadow DOM 隔离样式。
+(function () {
+  'use strict';
+
+  if (window.__QIUZHEN_HOVER_READY__) return;
+  window.__QIUZHEN_HOVER_READY__ = true;
+
+  var claimById = {};      // claimId -> claim
+  var docMeta = null;      // {title, url}（CAPTURE_SELECTION payload 用）
+  var marks = [];          // 已打标的 span（清理用）
+  var host = null;         // 提示卡 Shadow DOM 宿主
+  var shadow = null;
+  var tooltipTimer = null;
+
+  // ---------- 样式注入（页面内高亮，仅装饰不改文字） ----------
+
+  function ensureStyle() {
+    if (document.getElementById('qiuzhen-hover-style')) return;
+    var st = document.createElement('style');
+    st.id = 'qiuzhen-hover-style';
+    st.textContent = [
+      '.qiuzhen-claim {',
+      '  text-decoration: underline dotted rgba(79,110,247,.65);',
+      '  text-underline-offset: 3px; cursor: pointer;',
+      '  transition: background .18s ease;',
+      '}',
+      '.qiuzhen-claim:hover { background: rgba(79,110,247,.14); border-radius: 2px; }'
+    ].join('\n');
+    (document.head || document.documentElement).appendChild(st);
+  }
+
+  // ---------- 打标：按 sentence offset 包裹原文（不改变文字内容） ----------
+
+  function wrapClaim(paraEl, start, end, claimId) {
+    var walker = document.createTreeWalker(paraEl, NodeFilter.SHOW_TEXT);
+    var offset = 0;
+    var node;
+    while ((node = walker.nextNode())) {
+      var len = (node.textContent || '').length;
+      var nodeStart = offset;
+      var nodeEnd = offset + len;
+      offset = nodeEnd;
+      if (nodeEnd <= start || nodeStart >= end) continue;
+      var s = Math.max(start - nodeStart, 0);
+      var e = Math.min(end - nodeStart, len);
+      if (s >= e) continue;
+      var range = document.createRange();
+      range.setStart(node, s);
+      range.setEnd(node, e);
+      var span = document.createElement('span');
+      span.className = 'qiuzhen-claim';
+      span.dataset.claimId = claimId;
+      try {
+        range.surroundContents(span); // 仅当 range 在单个文本节点内才成功
+        marks.push(span);
+        return true;
+      } catch (err) {
+        return false; // 跨节点（含 <a>/<strong> 等内联元素）→ 放弃打标，hover 兜底
+      }
+    }
+    return false;
+  }
+
+  function activate(index, meta) {
+    deactivate();
+    if (!index || !index.claims || !index.claims.length) return;
+    docMeta = meta || null;
+    ensureStyle();
+    var extractor = window.__QIUZHEN_EXTRACTOR__;
+    index.claims.forEach(function (claim) {
+      var pos = claim.position;
+      if (!pos || !pos.paraId) return;
+      var paraEl = extractor && extractor.getParaElement(pos.paraId);
+      if (!paraEl) return;
+      if (wrapClaim(paraEl, pos.start, pos.end, claim.id)) {
+        claimById[claim.id] = claim;
+      }
+    });
+    if (Object.keys(claimById).length) document.addEventListener('mouseover', onMouseOver, true);
+  }
+
+  function deactivate() {
+    document.removeEventListener('mouseover', onMouseOver, true);
+    marks.forEach(function (m) {
+      var parent = m.parentNode;
+      if (parent) {
+        parent.replaceChild(document.createTextNode(m.textContent), m);
+        parent.normalize();
+      }
+    });
+    marks = [];
+    claimById = {};
+    docMeta = null;
+    hideTooltip();
+  }
+
+  // ---------- 提示卡（Shadow DOM 隔离） ----------
+
+  function ensureHost() {
+    if (host) return;
+    host = document.createElement('div');
+    host.style.cssText = 'position: fixed; z-index: 2147483647; pointer-events: none; display: none; left: 0; top: 0;';
+    shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = [
+      '<style>',
+      ':host { all: initial; }',
+      '.tip {',
+      '  font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;',
+      '  max-width: 300px; padding: 10px 12px; border-radius: 14px;',
+      '  background: rgba(250,250,253,.92); backdrop-filter: blur(14px) saturate(160%);',
+      '  border: 1px solid rgba(255,255,255,.7);',
+      '  box-shadow: 0 10px 32px rgba(30,40,80,.22);',
+      '  color: #20263a; font-size: 12.5px; line-height: 1.6;',
+      '  pointer-events: auto;',
+      '}',
+      '.badge { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; color: #8a6d1a; border: 1px solid #d9b84a; background: rgba(217,184,74,.14); margin-bottom: 6px; }',
+      '.text { margin: 4px 0 8px; }',
+      '.btns { display: flex; gap: 8px; }',
+      '.btn { border: none; cursor: pointer; padding: 4px 14px; border-radius: 999px; font-size: 12px; font-weight: 600; color: #fff; background: linear-gradient(135deg, #32ade6, #a05bf5); }',
+      '.btn:hover { filter: brightness(1.08); }',
+      '</style>',
+      '<div class="tip">',
+      '  <div class="badge">🟡 可验证声明</div>',
+      '  <div class="text"></div>',
+      '  <div class="btns"><button class="btn" data-mode="truth">求真</button><button class="btn" data-mode="deep">求深</button><button class="btn" data-mode="differ">求异</button></div>',
+      '</div>'
+    ].join('');
+    shadow.querySelectorAll('.btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var claim = claimById[host.dataset.claimId];
+        if (!claim || !docMeta) return;
+        // 复用现有主动选区链路（CAPTURE_SELECTION）——不新建分析入口
+        try {
+          chrome.runtime.sendMessage({
+            type: WCC_MSG.CAPTURE_SELECTION,
+            payload: {
+              title: docMeta.title,
+              url: docMeta.url,
+              selectedText: claim.text,
+              capturedAt: new Date().toISOString()
+            }
+          }, function () {});
+        } catch (e) { /* context invalidated */ }
+        hideTooltip();
+      });
+    });
+    document.documentElement.appendChild(host);
+  }
+
+  function showTooltip(claim, x, y) {
+    ensureHost();
+    host.dataset.claimId = claim.id;
+    shadow.querySelector('.text').textContent = claim.text;
+    host.style.display = 'block';
+    host.style.pointerEvents = 'none';
+    // 定位：右下偏移，视口边缘翻转
+    var w = 320, h = 160;
+    var left = x + 14, top = y + 16;
+    if (left + w > window.innerWidth - 8) left = x - w - 14;
+    if (top + h > window.innerHeight - 8) top = y - h - 16;
+    host.style.left = Math.max(8, left) + 'px';
+    host.style.top = Math.max(8, top) + 'px';
+    host.style.pointerEvents = 'auto';
+  }
+
+  function hideTooltip() {
+    if (!host) return;
+    host.style.display = 'none';
+  }
+
+  // ---------- 委托 ----------
+
+  var lastHoverClaimId = null;
+
+  function onMouseOver(e) {
+    var target = e.target;
+    if (!(target instanceof Element)) return;
+    if (host && host.contains && target.closest && host.contains(target)) return; // 提示卡内部
+    var span = target.closest ? target.closest('.qiuzhen-claim') : null;
+    if (!span) {
+      if (lastHoverClaimId) { lastHoverClaimId = null; hideTooltip(); }
+      return;
+    }
+    var claim = claimById[span.dataset.claimId];
+    if (!claim) { hideTooltip(); return; }
+    if (lastHoverClaimId !== claim.id) {
+      lastHoverClaimId = claim.id;
+      showTooltip(claim, e.clientX, e.clientY);
+    } else {
+      // 同句移动：跟随
+      showTooltip(claim, e.clientX, e.clientY);
+    }
+  }
+
+  window.__QIUZHEN_HOVER__ = {
+    activate: activate,
+    deactivate: deactivate
+  };
+})();

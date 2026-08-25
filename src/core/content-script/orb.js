@@ -10,6 +10,7 @@
   var STATE = { IDLE: 'idle', ANALYZING: 'analyzing', READY: 'ready', ERROR: 'error' };
   var state = STATE.IDLE;
   var lastIndex = null; // 最近一次 Claim Index（本地保留，U3 Hover 用）
+  var lastDocMeta = null; // {title, url}
 
   var orb = null;
   var badge = null;
@@ -99,6 +100,10 @@
       label.textContent = '求';
       badge.textContent = String(detail || 0);
       badge.style.display = 'block';
+      // 激活 Hover 声明交互层（U3）
+      try {
+        if (window.__QIUZHEN_HOVER__) window.__QIUZHEN_HOVER__.activate(lastIndex, lastDocMeta);
+      } catch (e) { /* hover 层失败不阻塞悬浮球 */ }
     } else if (s === STATE.ERROR) {
       orb.style.background = 'rgba(255,244,242,.86)';
       orb.style.borderColor = 'rgba(207,75,60,.5)';
@@ -118,6 +123,8 @@
   // ---------- 分析流程 ----------
 
   function analyze() {
+    // 重新分析前清理旧 Hover 标记
+    try { if (window.__QIUZHEN_HOVER__) window.__QIUZHEN_HOVER__.deactivate(); } catch (e) {}
     setState(STATE.ANALYZING);
     var doc;
     try {
@@ -126,6 +133,7 @@
       setState(STATE.ERROR);
       return;
     }
+    lastDocMeta = { title: doc.doc.title, url: doc.doc.url };
     try {
       chrome.runtime.sendMessage({ type: WCC_MSG.DETECT_CLAIMS, document: doc }, function (resp) {
         if (chrome.runtime.lastError || !resp || !resp.ok) { setState(STATE.ERROR); return; }

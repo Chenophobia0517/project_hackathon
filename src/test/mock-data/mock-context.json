@@ -1,0 +1,14 @@
+{
+  "type": "PAGE_CONTEXT_UPDATED",
+  "payload": {
+    "title": "WCC 测试页面 · 阅读上下文捕获验证",
+    "url": "http://localhost:8000/src/test/test-page/test-page.html",
+    "visibleText": "第 3 段：这是一个用于测试阅读上下文捕获的段落。\n第 4 段：它包含足够长度的文本内容。",
+    "visibleParagraphs": [
+      { "id": "wcc-p-3", "text": "第 3 段：这是一个用于测试阅读上下文捕获的段落。", "top": 320, "bottom": 410 },
+      { "id": "wcc-p-4", "text": "第 4 段：它包含足够长度的文本内容，用于验证可视区域判定。", "top": 426, "bottom": 516 }
+    ],
+    "totalParagraphCount": 55,
+    "capturedAt": "2026-08-25T09:00:00.000Z"
+  }
+}

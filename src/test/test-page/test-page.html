@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>WCC 测试页面 · 阅读上下文捕获验证</title>
+<style>
+  body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 760px; margin: 0 auto; padding: 24px; line-height: 1.8; color: #24292f; }
+  header { border-bottom: 2px solid #0969da; margin-bottom: 24px; padding-bottom: 12px; }
+  h1 { font-size: 22px; }
+  p { margin: 16px 0; }
+  .num { color: #cf222e; font-weight: bold; }
+  #load-more { margin: 24px 0; padding: 10px 20px; font-size: 14px; cursor: pointer; }
+  footer { margin-top: 40px; color: #888; font-size: 12px; border-top: 1px solid #eee; padding-top: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Web Context Capture 测试页面</h1>
+  <p id="meta">本页面用于验证：DOM 文本获取、可视区域判断、滚动更新、MutationObserver 动态内容支持。</p>
+</header>
+
+<main id="article"><!-- 由脚本生成 ≥ 50 个段落 --></main>
+
+<button id="load-more">点击动态加载 5 个段落（测试 MutationObserver）</button>
+
+<footer>WCC Test Page · 仅用于开发阶段</footer>
+
+<script src="../test-script/test-runner.js"></script>
+<script>
+(function () {
+  'use strict';
+  var article = document.getElementById('article');
+
+  var claims = [
+    '2024 年全球互联网用户数量达到 <span class="num">53.5 亿</span>，占世界人口的 66%。',
+    '研究显示，成年人平均每天进行 <span class="num">6 小时 37 分钟</span> 的在线阅读。',
+    '某报告指出，移动端贡献了网页总访问量的 <span class="num">59.4%</span>。',
+    '实验环境下，段落可视区域检测的准确率约为 <span class="num">98.2%</span>。',
+    '该数据集包含 <span class="num">12000</span> 条标注样本，覆盖 <span class="num">7</span> 种页面布局。'
+  ];
+
+  function makeParagraph(i) {
+    var p = document.createElement('p');
+    var body = '第 ' + (i + 1) + ' 段：这是一个用于测试阅读上下文捕获的段落。它包含足够长度的文本内容，以便验证结构化解析、页面顺序保持与可视区域判定逻辑是否正常工作。';
+    if (i % 4 === 0) body += ' ' + claims[i % claims.length];
+    p.innerHTML = body;
+    return p;
+  }
+
+  var INITIAL = 55; // ≥ 50 段落
+  var total = 0;
+  for (var i = 0; i < INITIAL; i++) article.appendChild(makeParagraph(total++));
+
+  document.getElementById('load-more').addEventListener('click', function () {
+    for (var k = 0; k < 5; k++) article.appendChild(makeParagraph(total++));
+  });
+
+  // 3 秒后自动追加，模拟异步动态内容
+  setTimeout(function () {
+    for (var k = 0; k < 2; k++) article.appendChild(makeParagraph(total++));
+  }, 3000);
+})();
+</script>
+</body>
+</html>

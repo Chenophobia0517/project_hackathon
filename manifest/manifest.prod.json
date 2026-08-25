@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Web Context Capture",
+  "version": "0.1.0",
+  "description": "Capture structured reading context from the current page.",
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/core/background/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "js": [
+        "src/core/utils/message-types.js",
+        "src/core/utils/throttle.js",
+        "src/core/utils/dom-utils.js",
+        "src/core/context-parser/paragraph-extractor.js",
+        "src/core/context-parser/visibility-detector.js",
+        "src/core/content-script/content.js"
+      ]
+    }
+  ]
+}

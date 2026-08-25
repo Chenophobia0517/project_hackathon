@@ -10,8 +10,7 @@ node_modules/
 Thumbs.db
 
 # 凭证与密钥（绝不入库）
-*_api.key
-api_key.key
+*.key
 *.secret
 .env
 .env.*

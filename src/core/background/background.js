@@ -1,6 +1,6 @@
 // Background Service Worker：Active Selection 的唯一中转与持久点（MV3，无独立后端——D2=B）。
 // 职责（PRD 06-技术架构 §4）：接收 CAPTURE_SELECTION → 存 storage.session → 广播/打开 Side Panel。
-importScripts('../generated-config.js', '../utils/message-types.js', '../ai/analyzer.js');
+importScripts('../generated-config.js', '../utils/message-types.js', '../ai/datasource.js', '../ai/analyzer.js');
 
 // ---------- Active Selection 状态 ----------
 
@@ -87,7 +87,17 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
         return false;
       }
       WCC_ANALYZER.analyze(message.mode, message.payload).then(
-        function (res) { sendResponse({ ok: true, analysis: res }); },
+        function (res) {
+          sendResponse({
+            ok: true,
+            analysis: {
+              result: res.result,
+              cached: res.cached,
+              verified: res.verified,
+              sources: res.sources || null
+            }
+          });
+        },
         function (err) {
           sendResponse({ ok: false, reason: String(err && err.message || 'analyze_failed') });
         }

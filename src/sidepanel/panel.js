@@ -69,7 +69,9 @@
       hide(els.loading); hide(els.error);
       renderResult(state.mode, cached);
       show(els.result); show(els.regen); show(els.foot);
-      els.cacheFlag.textContent = cached.cached ? '缓存' : '';
+      els.cacheFlag.textContent = cached.verified
+        ? (cached.cached ? '已核验 · 缓存' : '已核验')
+        : (cached.cached ? '未联网核验 · 缓存' : '未联网核验');
     } else {
       // 该模式尚未分析：自动触发
       startAnalysis(state.mode);
@@ -123,7 +125,12 @@
           if (seq !== state.seq) return; // 已有新 Claim/模式，丢弃过期响应
           state.analyzing = false;
           if (resp && resp.ok) {
-            state.results[mode] = { result: resp.analysis.result, cached: resp.analysis.cached };
+            state.results[mode] = {
+              result: resp.analysis.result,
+              cached: resp.analysis.cached,
+              verified: resp.analysis.verified,
+              sources: resp.analysis.sources
+            };
           } else {
             state.results[mode] = null;
             state.lastError = (resp && resp.reason) || 'no_response';
@@ -159,13 +166,32 @@
 
   function esc(s) { return String(s == null ? '' : s); }
 
-  function renderTruth(result) {
+  function renderTruth(result, entry) {
     var pane = els.panes.truth;
     pane.innerHTML = '';
     var c1 = cardWith('支持程度');
     c1.appendChild(el('span', 'badge ' + esc(result.supportLevel), SUPPORT_BADGES[result.supportLevel] || result.supportLevel));
     c1.appendChild(el('div', 'summary-text', esc(result.summary)));
     pane.appendChild(c1);
+
+    // 联网检索到的来源（M3：知乎开放平台）
+    var srcs = entry && entry.sources;
+    var srcItems = srcs ? (srcs.zhihu || []).concat(srcs.global || []) : [];
+    if (srcItems.length) {
+      var cs = cardWith('检索来源（知乎开放平台 · ' + srcItems.length + '）');
+      srcItems.slice(0, 8).forEach(function (it) {
+        var line = el('div', 'src-line');
+        var a = el('a', 'src-link', esc(it.title || '(无标题)'));
+        a.href = it.url; a.target = '_blank'; a.rel = 'noopener';
+        line.appendChild(a);
+        line.appendChild(el('span', 'src-meta',
+          esc((it.sourceType === 'Answer' ? '知乎回答' : it.sourceType === 'Article' ? '知乎文章' : '全网') +
+              (it.author ? ' · ' + it.author : '') +
+              (it.votes ? ' · ' + it.votes + ' 赞' : ''))));
+        cs.appendChild(line);
+      });
+      pane.appendChild(cs);
+    }
 
     var evs = Array.isArray(result.evidences) ? result.evidences : [];
     if (evs.length) {
@@ -299,7 +325,7 @@
       showError(state.lastError);
       return;
     }
-    RENDERERS[mode](entry.result);
+    RENDERERS[mode](entry.result, entry);
     Object.keys(els.panes).forEach(function (m) {
       els.panes[m].hidden = (m !== mode);
     });

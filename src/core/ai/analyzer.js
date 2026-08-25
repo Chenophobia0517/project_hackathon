@@ -130,7 +130,7 @@
 
   var TIMEOUT_MS = 45000;
 
-  function callDeepseek(mode, payload) {
+  function callDeepseek(mode, payload, extraContext) {
     if (!CONFIG || !CONFIG.DEEPSEEK_API_KEY) {
       return Promise.reject(new Error('config_missing'));
     }
@@ -138,6 +138,7 @@
       .replace('{{CLAIM}}', String(payload.selectedText || '').slice(0, 1200))
       .replace('{{TITLE}}', String(payload.title || '').slice(0, 200))
       .replace('{{URL}}', String(payload.url || '').slice(0, 300));
+    if (extraContext) userMsg += '\n\n' + extraContext;
 
     var controller = new AbortController();
     var timer = setTimeout(function () { controller.abort(); }, TIMEOUT_MS);
@@ -178,24 +179,55 @@
 
   // ---------- 对外入口 ----------
 
+  // 从 Claim 生成检索查询：截断到 60 字符，去掉引号等噪声
+  function buildQuery(claim) {
+    return String(claim || '')
+      .replace(/[「」『』""''《》]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60);
+  }
+
+  // 检索结果压缩为注入 prompt 的文本块（控制 token）
+  function formatSourcesForPrompt(sources) {
+    if (!sources || (!sources.zhihu.length && !sources.global.length)) return '';
+    var lines = ['【联网检索结果（知乎开放平台）】'];
+    sources.zhihu.slice(0, 4).forEach(function (it, i) {
+      lines.push((i + 1) + '.[知乎|' + it.sourceType + '|' + it.author + '] ' + it.title + '：' + it.snippet.slice(0, 120));
+    });
+    sources.global.slice(0, 4).forEach(function (it, i) {
+      lines.push((i + 1) + '.[全网|' + it.author + '] ' + it.title + '：' + it.snippet.slice(0, 120));
+    });
+    lines.push('核查时应优先依据以上检索结果；若与你的内部知识冲突，以检索结果为准并指出冲突。');
+    return lines.join('\n');
+  }
+
   // analyze(mode, payload) -> Promise<result>
-  // result: { mode, result, cached } 或抛错（config_missing / http_xxx / abort / 解析失败）
+  // result: { mode, result, cached, sources?, verified }
   function analyze(mode, payload) {
     if (!SYSTEM_PROMPTS[mode]) return Promise.reject(new Error('unknown_mode'));
     var key = cacheKey(mode, String(payload.selectedText || ''), payload.url);
     return cacheGet(key).then(function (hit) {
-      if (hit) return { mode: mode, result: hit.result, cached: true };
-      // 校验失败（模型偶发漏字段）自动重试一次再放弃
-      return callDeepseek(mode, payload).catch(function (err) {
-        if (String(err.message).indexOf('missing_fields') === 0 ||
-            err.message === 'unbalanced_json' || err.message === 'no_json_in_response') {
-          return callDeepseek(mode, payload);
-        }
-        throw err;
-      }).then(function (parsed) {
-        var entry = { result: parsed, at: Date.now() };
-        cacheSet(key, entry);
-        return { mode: mode, result: parsed, cached: false };
+      if (hit) return { mode: mode, result: hit.result, cached: true, sources: hit.sources, verified: hit.verified };
+
+      var query = buildQuery(payload.selectedText);
+      // 知乎数据源可用 → 先检索再分析；不可用 → 直接分析（verified=false）
+      var prep = WCC_DATASOURCE && WCC_DATASOURCE.isAvailable() && query.length >= 4
+        ? WCC_DATASOURCE.searchBoth(query).catch(function () { return null; })
+        : Promise.resolve(null);
+
+      return prep.then(function (sources) {
+        return callDeepseek(mode, payload, formatSourcesForPrompt(sources)).catch(function (err) {
+          if (String(err.message).indexOf('missing_fields') === 0 ||
+              err.message === 'unbalanced_json' || err.message === 'no_json_in_response') {
+            return callDeepseek(mode, payload, formatSourcesForPrompt(sources));
+          }
+          throw err;
+        }).then(function (parsed) {
+          var entry = { result: parsed, at: Date.now(), sources: sources, verified: !!sources };
+          cacheSet(key, entry);
+          return { mode: mode, result: parsed, cached: false, sources: sources, verified: !!sources };
+        });
       });
     });
   }

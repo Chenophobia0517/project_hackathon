@@ -33,6 +33,14 @@
 | `sidePanel` | 打开深读侧栏 |
 | `<all_urls>`（content_scripts） | 让「深读」按钮在任意网页可用；脚本只监听选择事件，不读取页面内容 |
 
+## 知乎开放能力（可选）
+
+在项目根放置 `zhihu_access_secret.key`（developer.zhihu.com/profile 生成）并重跑 `node scripts/gen-config.js` 后：
+
+- 求真分析前会经知乎开放平台检索站内外相关讨论，注入分析上下文
+- 结果底部显示「已核验」标记与可点击的检索来源列表
+- 无凭证时自动降级：仅基于模型知识分析，UI 明示「未联网核验」
+
 ## 目录结构
 
 ```
@@ -41,6 +49,7 @@ project_hackathon/
 ├── src/core/
 │   ├── content-script/      # 页面注入：选区捕获、「深读」按钮
 │   ├── background/          # Service Worker：Active Selection 中转、Side Panel 控制
+│   ├── ai/                  # 分析链路（DeepSeek 三模式）+ 知乎数据源（可插拔）
 │   └── utils/               # 消息类型常量
 ├── src/sidepanel/           # 深读工作台（三 Tab：求真 / 求深 / 求异）
 ├── .e2e/                    # 本地端到端验证脚本（开发用，见目录内注释）

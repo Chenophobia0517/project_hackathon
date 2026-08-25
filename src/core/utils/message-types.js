@@ -9,6 +9,8 @@
     GET_ACTIVE_SELECTION: 'GET_ACTIVE_SELECTION',
     // background → side panel：Active Selection 已更新（面板打开时实时刷新）
     ACTIVE_SELECTION_UPDATED: 'ACTIVE_SELECTION_UPDATED',
+    // side panel → background：请求 AI 深读分析（mode: truth/deep/differ）
+    ANALYZE: 'ANALYZE',
     // 诊断
     PING: 'PING'
   });

@@ -44,7 +44,12 @@
     seq: 0                // 丢弃过期响应（连续深读时旧响应作废）
   };
 
-  var CLAIM_TYPE_NAMES = { fact: '事实', number: '数字', causal: '因果', compare: '比较', predict: '预测', define: '定义', other: '其他', opinion: '观点' };
+  var CLAIM_TYPE_NAMES = { fact: '事实', number: '数字', causal: '因果', compare: '比较', predict: '预测', define: '定义', person: '人物事件', other: '其他', opinion: '观点' };
+  var OBJECT_TYPE_NAMES = {
+    plain: '普通正文', fact: '事实', data: '数据', report: '报告',
+    paper: '论文', govdoc: '政府文件', orginfo: '机构信息', media: '媒体',
+    person: '人物事件', opinion: '观点', rhetoric: '修辞'
+  };
 
   var LOADING_STEPS = {
     truth: ['解析当前 Claim', '检索相关知识', '核对表述与证据'],
@@ -365,17 +370,20 @@
     var di = state.docIndex;
     var index = di.index;
     var claims = index.claims || [];
-    var opinions = index.opinions || [];
+    var objectStats = index.objectStats || {};
     els.ovTitle.textContent = di.title || '本文';
     els.ovStats.innerHTML = '';
+    // v2：信息对象分布统计（升级要求 §2）+ 已核实计数
     var stats = [
-      { label: '可验证声明', n: claims.length, cls: '' },
-      { label: '主观观点', n: opinions.length, cls: '' },
+      { label: '可溯源声明', n: claims.length, cls: '' },
       { label: '已核实', n: Object.keys(state.verified).length, cls: '' }
     ];
+    Object.keys(objectStats).forEach(function (ot) {
+      if (objectStats[ot] > 0) stats.push({ label: OBJECT_TYPE_NAMES[ot] || ot, n: objectStats[ot], cls: '' });
+    });
     stats.forEach(function (s) {
       var span = el('span', 'ov-stat');
-      span.innerHTML = s.label + ' <b>' + s.n + '</b>';
+      span.innerHTML = esc(s.label) + ' <b>' + s.n + '</b>';
       els.ovStats.appendChild(span);
     });
     els.ovList.innerHTML = '';
@@ -383,6 +391,7 @@
       var item = el('button', 'ov-item glass');
       var head = el('div', 'ov-item-head');
       head.appendChild(el('span', 'ov-type', CLAIM_TYPE_NAMES[claim.type] || '声明'));
+      head.appendChild(el('span', 'ov-obj', OBJECT_TYPE_NAMES[claim.objectType] || ''));
       var v = state.verified[claim.id];
       if (v) head.appendChild(el('span', 'ov-verified', SUPPORT_BADGES[v] || v));
       item.appendChild(head);
@@ -393,13 +402,14 @@
           url: di.url || '',
           selectedText: claim.text,
           capturedAt: new Date().toISOString(),
-          __claimId: claim.id
+          __claimId: claim.id,
+          __sourceRequirement: claim.sourceRequirement || 'any'
         });
       });
       els.ovList.appendChild(item);
     });
     if (!claims.length) {
-      els.ovList.appendChild(el('div', 'muted', '本文没有识别出可验证声明。'));
+      els.ovList.appendChild(el('div', 'muted', '本文没有识别出具有溯源价值的声明。'));
     }
   }
 

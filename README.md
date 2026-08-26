@@ -37,7 +37,7 @@
 
 ## 知乎开放能力（可选）
 
-在项目根放置 `zhihu_access_secret.key`（developer.zhihu.com/profile 生成）并重跑 `node scripts/gen-config.js` 后：
+在项目根放置 `zhihu_api.key`（developer.zhihu.com/profile 生成）并重跑 `node scripts/gen-config.js` 后：
 
 - 求真分析前会经知乎开放平台检索站内外相关讨论，注入分析上下文
 - 结果底部显示「已核验」标记与可点击的检索来源列表

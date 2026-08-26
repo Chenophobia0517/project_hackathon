@@ -7,7 +7,7 @@
 
 1. 项目根放好 `deepseek_api.key`，运行 `node scripts/gen-config.js`
 2. Chrome 打开 `chrome://extensions` → 开发者模式 → 加载已解压的扩展程序 → 选择仓库根目录
-3. （可选）放置 `zhihu_access_secret.key` 并重跑 gen-config → 底部显示「已核验」+ 检索来源链接；无凭证则显示「未联网核验」（降级态，演示同样成立）
+3. （可选）放置 `zhihu_api.key` 并重跑 gen-config → 底部显示「已核验」+ 检索来源链接；无凭证则显示「未联网核验」（降级态，演示同样成立）
 4. 打开演示页（推荐知乎问答 / 新闻长文 / 技术博客，选一段有观点、有数据、可质疑的内容）
 
 ## 演示流程

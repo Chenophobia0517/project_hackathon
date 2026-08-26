@@ -110,7 +110,7 @@ PRD 要求 Key 不进前端、必须有 Backend。两个选项：
 
 ### M3 · 知乎开放能力接入（半天～1 天） ✅ 已交付（tag m3-zhihu-pluggable，降级态验证通过）
 - datasource.js：知乎搜索 / 全网搜索 HTTP 客户端（Bearer Access Secret 鉴权）
-- gen-config 支持可选 zhihu_access_secret.key；无凭证自动降级
+- gen-config 支持可选 zhihu_api.key（兼容旧名 zhihu_access_secret.key）；无凭证自动降级
 - 证据来源分层注入 prompt；UI 显示「已核验/未联网核验」+ 检索来源链接
 - ⏳ 待凭证到位：放置 key 文件 → 重跑 gen-config → 重载扩展即启用（零代码改动）
 
@@ -140,6 +140,12 @@ PRD 要求 Key 不进前端、必须有 Backend。两个选项：
   - 修复：延迟隐藏 timer 300ms + shadowRoot.contains 卡片保护 + opacity 淡入/淡出动画 + 同句内不跟随定位
 - O2 悬浮球尺寸/位置 ✅（用户反馈：按钮过小）：42px→84px（box-sizing 修正精确尺寸），字号 16→30，徽标同步放大，移至左上角
 - 验证 9/9 PASS：移动途中卡片不消失 / 进入卡片保持显示 / 按钮可点击 / 离开淡出 / orb 84x84 左上角
+
+### 知乎接入 · 凭证到位正式启用（2026-08-26） ✅
+- `zhihu_api.key`（40 chars）配置并生成 generated-config；gen-config 兼容新文件名
+- Node 层真实 API 冒烟 7/7：zhihu_search/global_search 鉴权通过、归一化字段完整、坏凭证 20001 正确拒绝
+- SW 运行时 E2E 4/4：选区深读 → 求真「已核验」徽章 + 8 条知乎来源链接
+- 文档同步（README/DEMO/WORKPLAN）；datasource.js 零改动——M3 可插拔设计直接生效
 
 ---
 

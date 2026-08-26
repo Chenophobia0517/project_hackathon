@@ -50,9 +50,11 @@
       var range = document.createRange();
       range.setStart(node, s);
       range.setEnd(node, e);
-      span.className = 'qiuzhen-claim';
-      span.dataset.claimId = claimId;
+      // 每个文本节点独立创建 span（v2.0 回归修复：N6 误删声明致 ReferenceError 中断全部打标）
+      var span = document.createElement('span');
       try {
+        span.className = 'qiuzhen-claim';
+        span.dataset.claimId = claimId;
         range.surroundContents(span); // 仅当 range 在单个文本节点内才成功
         marks.push(span);
         return true;
@@ -72,11 +74,14 @@
     index.claims.forEach(function (claim) {
       var pos = claim.position;
       if (!pos || !pos.paraId) return;
-      var paraEl = extractor && extractor.getParaElement(pos.paraId);
-      if (!paraEl) return;
-      if (wrapClaim(paraEl, pos.start, pos.end, claim.id)) {
-        claimById[claim.id] = claim;
-      }
+      try {
+        // 独立兜底：任何一条的异常只跳过该条，不中断其余 Claim 打标（v2.0 防御加固）
+        var paraEl = extractor && extractor.getParaElement(pos.paraId);
+        if (!paraEl) return;
+        if (wrapClaim(paraEl, pos.start, pos.end, claim.id)) {
+          claimById[claim.id] = claim;
+        }
+      } catch (err) { /* 单条失败不影响整体 */ }
     });
     if (Object.keys(claimById).length) document.addEventListener('mouseover', onMouseOver, true);
   }

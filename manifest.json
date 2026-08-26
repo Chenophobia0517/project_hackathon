@@ -3,7 +3,7 @@
   "name": "求真 · 深读",
   "version": "0.2.0",
   "description": "在正在阅读的网页上选中一句话，验证它、理解它，并发现你可能遗漏的观点。",
-  "permissions": ["storage", "sidePanel"],
+  "permissions": ["storage", "sidePanel", "tabs"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/core/background/background.js"

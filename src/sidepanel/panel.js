@@ -397,12 +397,20 @@
       item.appendChild(head);
       item.appendChild(el('div', 'ov-text', esc(claim.text)));
       item.addEventListener('click', function () {
+        // N6：Claim ↔ 网页定位——通知 content script 滚动到声明句并高亮（§12）
+        try {
+          chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+            var tab = tabs && tabs[0];
+            if (tab) chrome.tabs.sendMessage(tab.id, { type: 'QIUZHEN_LOCATE_CLAIM', claimId: claim.id, sentenceId: claim.sentenceId }, function () { void chrome.runtime.lastError; });
+          });
+        } catch (e) { /* 忽略 */ }
         showClaim({
           title: String(di.title || '') + ' · 本文声明',
           url: di.url || '',
           selectedText: claim.text,
           capturedAt: new Date().toISOString(),
           __claimId: claim.id,
+          __sentenceId: claim.sentenceId,
           __sourceRequirement: claim.sourceRequirement || 'any'
         });
       });

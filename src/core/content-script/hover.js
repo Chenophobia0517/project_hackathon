@@ -50,7 +50,6 @@
       var range = document.createRange();
       range.setStart(node, s);
       range.setEnd(node, e);
-      var span = document.createElement('span');
       span.className = 'qiuzhen-claim';
       span.dataset.claimId = claimId;
       try {
@@ -218,8 +217,48 @@
     showTooltip(claim, e.clientX, e.clientY);
   }
 
+  // ---------- 面板定位请求（N6：Claim ↔ 网页定位闭环） ----------
+
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+      if (!message || message.type !== 'QIUZHEN_LOCATE_CLAIM') return;
+      var ok = false;
+      if (message.claimId) ok = scrollToClaimId(message.claimId);
+      if (!ok && message.sentenceId) ok = scrollToClaim(message.sentenceId);
+      try { sendResponse({ ok: ok }); } catch (e) { /* 忽略 */ }
+    });
+  }
+
   window.__QIUZHEN_HOVER__ = {
     activate: activate,
-    deactivate: deactivate
+    deactivate: deactivate,
+    // N6：Claim ↔ 网页定位——滚动到声明句并高亮闪烁
+    scrollToClaim: function (sentenceId) {
+      var target = null;
+      for (var i = 0; i < marks.length; i++) {
+        if (marks[i].dataset.claimId && marks[i].dataset.sid === sentenceId) { target = marks[i]; break; }
+      }
+      if (!target) {
+        // 兜底：按 data-qz-sid 找（未打标但 extractor 有锚点的段落）
+        return false;
+      }
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.style.background = 'rgba(79,110,247,.28)';
+      setTimeout(function () { target.style.background = ''; }, 1600);
+      return true;
+    },
+    // 按 claimId 直接定位（marks 上存了 claimId）
+    scrollToClaimId: function (claimId) {
+      for (var i = 0; i < marks.length; i++) {
+        if (marks[i].dataset.claimId === claimId) {
+          marks[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          marks[i].style.background = 'rgba(79,110,247,.28)';
+          var m = marks[i];
+          setTimeout(function () { m.style.background = ''; }, 1600);
+          return true;
+        }
+      }
+      return false;
+    }
   };
 })();

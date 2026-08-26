@@ -27,7 +27,7 @@
     orb.setAttribute('aria-label', '求真：分析本文可验证声明');
     orb.title = '求真 · 分析本文声明';
     orb.style.cssText = [
-      'position: fixed', 'right: 18px', 'top: 18px', 'z-index: 2147483646', // 右上角
+      'position: fixed', 'right: 18px', 'top: 56px', 'z-index: 2147483646', // 右上角，下移避开浏览器工具栏区（TD5）
       'width: 84px', 'height: 84px', 'border-radius: 50%', 'box-sizing: border-box', // O2：42px → 84px
       'display: flex', 'align-items: center', 'justify-content: center',
       'cursor: pointer', 'user-select: none',
@@ -74,9 +74,57 @@
       document.documentElement.appendChild(st);
     }
 
-    orb.addEventListener('mouseenter', function () { orb.style.opacity = '1'; orb.style.transform = 'scale(1.08)'; });
-    orb.addEventListener('mouseleave', function () { if (state !== STATE.ANALYZING) orb.style.transform = 'scale(1)'; });
+    orb.addEventListener('mouseenter', function () { orb.style.opacity = '1'; if (!dragging) orb.style.transform = 'scale(1.08)'; });
+    orb.addEventListener('mouseleave', function () { if (state !== STATE.ANALYZING && !dragging) orb.style.transform = 'scale(1)'; });
+
+    // N6：拖动 + 位置记忆（§12：自由拖动、限制可视区域、记忆上次位置）
+    // 区分点击与拖动：位移超过 6px 视为拖动，抑制随后的 click
+    var dragState = null;
+    var dragging = false;
+    orb.addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      var rect = orb.getBoundingClientRect();
+      dragState = { sx: e.clientX, sy: e.clientY, ox: rect.left, oy: rect.top, moved: false };
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!dragState) return;
+      var dx = e.clientX - dragState.sx, dy = e.clientY - dragState.sy;
+      if (!dragState.moved && Math.abs(dx) + Math.abs(dy) > 6) { dragState.moved = true; dragging = true; }
+      if (!dragState.moved) return;
+      var w = orb.offsetWidth || 84, h = orb.offsetHeight || 84;
+      var nx = Math.max(4, Math.min(window.innerWidth - w - 4, dragState.ox + dx));
+      var ny = Math.max(4, Math.min(window.innerHeight - h - 4, dragState.oy + dy));
+      orb.style.left = nx + 'px';
+      orb.style.top = ny + 'px';
+      orb.style.right = 'auto';
+    });
+    document.addEventListener('mouseup', function () {
+      if (!dragState) return;
+      var wasDrag = dragState.moved;
+      dragState = null;
+      setTimeout(function () { dragging = false; }, 0);
+      if (wasDrag) {
+        // 拖动结束 → 记忆位置（storage.session，会话级）
+        try {
+          var rect = orb.getBoundingClientRect();
+          chrome.storage.session.set({ orbPos: { x: Math.round(rect.left), y: Math.round(rect.top) } }, function () {});
+        } catch (err) { /* 忽略 */ }
+      }
+    });
+
     orb.addEventListener('click', onOrbClick);
+    // N6：恢复上次位置（默认右上角 top:56px——TD5 用户要求下移一点）
+    try {
+      chrome.storage.session.get('orbPos', function (data) {
+        if (data && data.orbPos && typeof data.orbPos.x === 'number') {
+          var w = orb.offsetWidth || 84, h = orb.offsetHeight || 84;
+          orb.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, data.orbPos.x)) + 'px';
+          orb.style.top = Math.max(4, Math.min(window.innerHeight - h - 4, data.orbPos.y)) + 'px';
+          orb.style.right = 'auto';
+        }
+      });
+    } catch (err) { /* 忽略 */ }
     document.documentElement.appendChild(orb);
     return orb;
   }

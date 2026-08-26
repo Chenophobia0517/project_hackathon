@@ -147,6 +147,15 @@ PRD 要求 Key 不进前端、必须有 Backend。两个选项：
 - SW 运行时 E2E 4/4：选区深读 → 求真「已核验」徽章 + 8 条知乎来源链接
 - 文档同步（README/DEMO/WORKPLAN）；datasource.js 零改动——M3 可插拔设计直接生效
 
+### 全网搜索接入修复（2026-08-26 用户反馈） ✅
+- 诊断：global_search 接口层本已接通，但 ContentType 只是内容形态枚举（全网结果也是 'Answer'），
+  UI 按 ContentType 标注导致全网条目全部被误标为「知乎回答」——用户看到"没有全网搜索"
+- 修复：datasource 归一化加 origin 字段（zhihu/global）；panel 来源卡按 origin 标注
+  （全网 · 回答/文章/网页 vs 知乎回答/知乎文章），卡片标题分组计数「检索来源（知乎站内 N · 全网 M）」
+- 验证：mock 层 12/12 PASS（origin 标记/端点/去 em/标注分支防回归）；
+  新 key 到位后真实 E2E 7/7 PASS——来源卡「知乎站内 5 · 全网 5」，8 条来源含 3 条全网标注
+- 注：期间遭遇平台 30001 频率限制窗口（无 Retry-After 头），用户更换 key 后恢复
+
 ---
 
 ## 五、风险与应对

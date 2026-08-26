@@ -158,6 +158,43 @@ PRD 要求 Key 不进前端、必须有 Backend。两个选项：
 
 ---
 
+# V2.0 执行记录
+
+> 计划见上文「V2.0 升级计划」，2026-08-26 获批（TD1-TD4 按建议；TD5=保持 84px 下移一点）。
+
+## 里程碑交付状态 ✅ 全部完成
+
+| 里程碑 | 提交 | 内容 | Node 层验证 |
+|---|---|---|---|
+| N0 | `1847d8f` | Claim Detection v2：11 类信息对象识别+验证价值过滤+上下文 Claim | 10/10 |
+| N1 | `fd894ed` | Search Controller：Source Type 分类器+四级白名单+关键词生成+综合评分排序 | 12/12 |
+| N2 | `6375242` | Web Reader：原文抓取+自研轻量正文抽取+失败降级 | 9/9 |
+| N3 | `8da0d29` | 证据验证引擎：逐源判定（存在≠相关≠支持）+五态结论+权威加权 | 8/8 |
+| N4 | `4061860` | 求异真实来源化：挖掘真实对立观点（逐字引用+URL），禁止编造 | 6/6 |
+| N5 | `da7f19c` | 扫描/询问双模式分离：differ 注入真实对立观点 | 4/4 |
+| N6 | `7e79259` | UI：悬浮球拖动/位置记忆/下移(56px) + Claim 定位回网页高亮 | 注入链模拟通过* |
+| N7 | 本提交 | 回归+验收+文档+tag v2.0 | 见下 |
+
+## 已知环境问题（非代码缺陷）
+
+- **Chrome 151 + --load-extension 的 content script 注入失效**：本自动化测试环境中，
+  开发者模式扩展的 content script 不再注入页面（含最小 hello-world 扩展复现；
+  chrome://extensions 显示已启用无错误；site access 设为"在所有网站上允许"后
+  仅首次导航偶发注入）。注入链模拟执行证明 5 个 content script 无运行时错误。
+  **影响**：E2E 自动化暂不可用。**缓解**：人工加载扩展正常使用（普通启动方式），
+  或降级 Chrome for Testing 版本跑 E2E。
+- 知乎平台 30001 频率限制窗口（无 Retry-After）：Search Controller 串行+缓存已缓解。
+
+## 验收清单对照（升级要求 §13）
+
+- [x] 信息识别：研究报告/文件等 11 类对象识别（N0）；政府/媒体/科研/商业等来源分类（N1）；修辞与情绪过滤（N0 traceable=false）
+- [x] Claim：上下文分析（N0 prev/next/para 注入）；观点背后的可验证信息（§4 prompt 原则）；Claim 定位回原文（N6 scrollToClaimId）
+- [x] 搜索：按 Claim 类型选源（N1 sourceRequirement→查询倾向+优先级）；白名单执行（N1 四级表）；候选排序（N1 综合评分）；Web Reader 读原文（N2）；支持性判定（N3）
+- [x] 结果：可点击 URL（面板来源卡）；五态严格区分（N3 not_needed/no_source/unsupported/partial/supported）；求异真实来源（N4/N5 viewpoint 带 sourceUrl）
+- [x] 回归：知乎 API/联网搜索/选区深读/三 Tab/悬浮球——Node 层全部链路验证通过；浏览器端 E2E 受上述环境问题影响，待人工验收
+
+---
+
 ## 五、风险与应对
 
 | 风险 | 应对 |

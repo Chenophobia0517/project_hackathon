@@ -215,10 +215,83 @@
     });
   }
 
+  // ---------- 求异：真实不同立场挖掘（V2.0 N4，§10） ----------
+
+  // 禁止 AI 编造立场；必须来自真实来源原文
+  var DIFFER_PROMPT = [
+    '你是观点调研员。给你一个【原始声明】和一个【来源原文】。',
+    '请判断该来源是否表达了与声明不同或相反的观点/结论/数据解读。',
+    '- different：表达了明显不同的立场、结论或质疑（须逐字引用关键句）；',
+    '- same：观点与声明一致或仅是复述；',
+    '- irrelevant：主题不相关。',
+    '要求：quote 必须是来源原文的**逐字片段**（≤100字）；viewpoint 用一句话概括该来源的立场。',
+    '找不到真实依据就不要编造——宁报 same/irrelevant 也不虚构不同观点。',
+    '只输出 JSON：{"verdict":"different|same|irrelevant","viewpoint":"一句话立场概括","quote":"逐字片段"}'
+  ].join('\n');
+
+  function judgeDifferOne(candidate, claim) {
+    var sourceText = candidate.content || candidate.snippet || '';
+    if (!sourceText || sourceText.length < 30) {
+      candidate.differJudgment = { verdict: 'irrelevant', viewpoint: '', quote: '', note: '未能读取正文' };
+      return Promise.resolve(candidate);
+    }
+    var user = '【原始声明】' + claim.text + '\n\n【来源标题】' + (candidate.title || '') + '\n\n【来源原文】\n' + sourceText.slice(0, 4000);
+    return callLLM(DIFFER_PROMPT, user).then(function (j) {
+      var v = j.verdict;
+      if (['different', 'same', 'irrelevant'].indexOf(v) < 0) v = 'same';
+      candidate.differJudgment = {
+        verdict: v,
+        viewpoint: String(j.viewpoint || '').slice(0, 200),
+        quote: String(j.quote || '').slice(0, 250)
+      };
+      return candidate;
+    }).catch(function () {
+      candidate.differJudgment = { verdict: 'same', viewpoint: '', quote: '', note: '判定失败保守归为同立场' };
+      return candidate;
+    });
+  }
+
+  // discoverDifferViewpoints(claim, candidates) ->
+  //   Promise<{found:boolean, viewpoints:[{url,title,sourceType,origin,viewpoint,quote}]}>
+  function discoverDifferViewpoints(claim, candidates) {
+    if (!candidates || !candidates.length) {
+      return Promise.resolve({ found: false, viewpoints: [], detail: '没有候选来源' });
+    }
+    var TOP_N = Math.min(candidates.length, 4); // 求异需要更广覆盖
+    var top = candidates.slice(0, TOP_N);
+    return global.WCC_WEB_READER.readAll(top).then(function (withContent) {
+      var chain = Promise.resolve([]);
+      withContent.forEach(function (cand) {
+        chain = chain.then(function (acc) {
+          return judgeDifferOne(cand, claim).then(function (j) { acc.push(j); return acc; });
+        });
+      });
+      return chain.then(function (judged) {
+        var differ = judged.filter(function (c) { return c.differJudgment && c.differJudgment.verdict === 'different'; });
+        return {
+          found: differ.length > 0,
+          viewpoints: differ.map(function (c) {
+            return {
+              url: c.url,
+              title: c.title || c.url,
+              sourceType: c.sourceType,
+              origin: c.origin,
+              viewpoint: c.differJudgment.viewpoint,
+              quote: c.differJudgment.quote
+            };
+          }),
+          scanned: judged.length,
+          detail: differ.length ? '' : '已检索并阅读 ' + judged.length + ' 个来源，暂未找到可靠的不同观点'
+        };
+      });
+    });
+  }
+
   global.WCC_VERIFY_ENGINE = {
     verifyClaim: verifyClaim,
     judgeOne: judgeOne,
     aggregate: aggregate,
+    discoverDifferViewpoints: discoverDifferViewpoints,
     VERDICTS: VERDICTS,
     VERDICT_NAMES: VERDICT_NAMES
   };

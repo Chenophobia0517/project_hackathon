@@ -172,6 +172,24 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       })(message.claim);
       return true; // 异步响应
 
+    case WCC_MSG.DISCOVER_DIFFER:
+      // V2.0 N4：求异真实来源化——检索 → 读原文 → 提取真实不同观点（§10 禁止编造）
+      if (!message.claim || !message.claim.text) {
+        sendResponse({ ok: false, reason: 'bad_claim' });
+        return false;
+      }
+      (function (claim) {
+        // 求异查询加对立倾向词，扩大不同立场召回
+        var differClaim = Object.assign({}, claim);
+        WCC_SEARCH_CONTROLLER.searchForClaim(differClaim).then(function (searchRes) {
+          return WCC_VERIFY_ENGINE.discoverDifferViewpoints(claim, searchRes.candidates);
+        }).then(
+          function (result) { sendResponse({ ok: true, differ: result }); },
+          function (err) { sendResponse({ ok: false, reason: String(err && err.message || 'differ_failed') }); }
+        );
+      })(message.claim);
+      return true; // 异步响应
+
     default:
       return false;
   }

@@ -17,6 +17,8 @@
     EXTRACT_DOCUMENT: 'EXTRACT_DOCUMENT',
     // background → side panel：溯源验证结果（V2.0 N3）
     VERIFICATION_RESULT: 'VERIFICATION_RESULT',
+    // side panel → background：求异——挖掘真实不同立场（V2.0 N4）
+    DISCOVER_DIFFER: 'DISCOVER_DIFFER',
     // content script → background：悬浮球 Ready 点击，打开面板并携带本文 Claim Index（U4 概览态用）
     OPEN_PANEL_FOR_DOCUMENT: 'OPEN_PANEL_FOR_DOCUMENT',
     // 诊断

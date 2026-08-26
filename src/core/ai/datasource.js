@@ -50,7 +50,9 @@
 
   // ---------- 归一化 ----------
 
-  function normalizeItems(data) {
+  // origin 标记来源接口（'zhihu'=站内搜索 / 'global'=全网搜索）：
+  // 注意 ContentType 只是内容形态（Answer/Article），全网结果也可能是 Answer，不能作为来源判断依据
+  function normalizeItems(data, origin) {
     var items = (data && data.Items) || [];
     return items.map(function (it) {
       return {
@@ -59,7 +61,8 @@
         snippet: String(it.ContentText || '').replace(/<\/?em>/g, ''),
         url: it.Url || '',
         author: it.AuthorName || '',
-        sourceType: it.ContentType || '',   // Answer / Article ...
+        sourceType: it.ContentType || '',   // Answer / Article ...（内容形态）
+        origin: origin,                     // zhihu / global（来源接口）
         votes: it.VoteUpCount || 0,
         authority: Number(it.AuthorityLevel) || 1  // 1低~4超高
       };
@@ -71,13 +74,13 @@
   // searchZhihu(query, count) -> Promise<items[]>  知乎站内讨论/回答/文章
   function searchZhihu(query, count) {
     return apiGet('/zhihu_search', { Query: String(query || '').slice(0, 100), Count: Math.min(count || 5, 10) })
-      .then(normalizeItems);
+      .then(function (data) { return normalizeItems(data, 'zhihu'); });
   }
 
   // searchGlobal(query, count) -> Promise<items[]>  知乎之外的全网来源
   function searchGlobal(query, count) {
     return apiGet('/global_search', { Query: String(query || '').slice(0, 100), Count: Math.min(count || 5, 20) })
-      .then(normalizeItems);
+      .then(function (data) { return normalizeItems(data, 'global'); });
   }
 
   // searchBoth(query) -> Promise<{ zhihu, global }>，任一失败不拖垮整体（返回空数组）

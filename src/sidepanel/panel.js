@@ -194,18 +194,22 @@
     c1.appendChild(el('div', 'summary-text', esc(result.summary)));
     pane.appendChild(c1);
 
-    // 联网检索到的来源（M3：知乎开放平台）
+    // 联网检索到的来源（M3：知乎开放平台；origin 区分知乎站内/全网）
     var srcs = entry && entry.sources;
     var srcItems = srcs ? (srcs.zhihu || []).concat(srcs.global || []) : [];
     if (srcItems.length) {
-      var cs = cardWith('检索来源（知乎开放平台 · ' + srcItems.length + '）');
+      var zhihuN = (srcs.zhihu || []).length;
+      var globN = (srcs.global || []).length;
+      var cs = cardWith('检索来源（知乎站内 ' + zhihuN + ' · 全网 ' + globN + '）');
       srcItems.slice(0, 8).forEach(function (it) {
         var line = el('div', 'src-line');
         var a = el('a', 'src-link', esc(it.title || '(无标题)'));
         a.href = it.url; a.target = '_blank'; a.rel = 'noopener';
         line.appendChild(a);
         line.appendChild(el('span', 'src-meta',
-          esc((it.sourceType === 'Answer' ? '知乎回答' : it.sourceType === 'Article' ? '知乎文章' : '全网') +
+          esc((it.origin === 'global'
+                ? '全网 · ' + (it.sourceType === 'Answer' ? '回答' : it.sourceType === 'Article' ? '文章' : '网页')
+                : it.sourceType === 'Answer' ? '知乎回答' : it.sourceType === 'Article' ? '知乎文章' : '知乎') +
               (it.author ? ' · ' + it.author : '') +
               (it.votes ? ' · ' + it.votes + ' 赞' : ''))));
         cs.appendChild(line);

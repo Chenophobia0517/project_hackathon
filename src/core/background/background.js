@@ -1,6 +1,6 @@
 // Background Service Worker：Active Selection 的唯一中转与持久点（MV3，无独立后端——D2=B）。
 // 职责（PRD 06-技术架构 §4）：接收 CAPTURE_SELECTION → 存 storage.session → 广播/打开 Side Panel。
-importScripts('../generated-config.js', '../utils/message-types.js', '../ai/datasource.js', '../ai/analyzer.js', '../ai/claim-detector.js', '../ai/search-controller.js');
+importScripts('../generated-config.js', '../utils/message-types.js', '../ai/datasource.js', '../ai/analyzer.js', '../ai/claim-detector.js', '../ai/search-controller.js', '../ai/web-reader.js');
 
 // ---------- Active Selection 状态 ----------
 

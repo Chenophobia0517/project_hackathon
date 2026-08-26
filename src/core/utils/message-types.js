@@ -15,6 +15,8 @@
     DETECT_CLAIMS: 'DETECT_CLAIMS',
     // background → content script：请求提取正文结构（调试/面板刷新用）
     EXTRACT_DOCUMENT: 'EXTRACT_DOCUMENT',
+    // background → side panel：溯源验证结果（V2.0 N3）
+    VERIFICATION_RESULT: 'VERIFICATION_RESULT',
     // content script → background：悬浮球 Ready 点击，打开面板并携带本文 Claim Index（U4 概览态用）
     OPEN_PANEL_FOR_DOCUMENT: 'OPEN_PANEL_FOR_DOCUMENT',
     // 诊断

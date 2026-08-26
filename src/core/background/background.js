@@ -1,6 +1,6 @@
 // Background Service Worker：Active Selection 的唯一中转与持久点（MV3，无独立后端——D2=B）。
 // 职责（PRD 06-技术架构 §4）：接收 CAPTURE_SELECTION → 存 storage.session → 广播/打开 Side Panel。
-importScripts('../generated-config.js', '../utils/message-types.js', '../ai/datasource.js', '../ai/analyzer.js', '../ai/claim-detector.js', '../ai/search-controller.js', '../ai/web-reader.js');
+importScripts('../generated-config.js', '../utils/message-types.js', '../ai/datasource.js', '../ai/analyzer.js', '../ai/claim-detector.js', '../ai/search-controller.js', '../ai/web-reader.js', '../ai/verify-engine.js');
 
 // ---------- Active Selection 状态 ----------
 
@@ -147,6 +147,30 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     case WCC_MSG.PING:
       sendResponse({ ok: true, pong: true, at: Date.now() });
       return false;
+
+    case WCC_MSG.VERIFY_CLAIM:
+      // V2.0 N3：溯源管线——Search Controller → Top-N → Web Reader → 逐源判定 → 五态结论
+      if (!message.claim || !message.claim.text) {
+        sendResponse({ ok: false, reason: 'bad_claim' });
+        return false;
+      }
+      (function (claim) {
+        WCC_SEARCH_CONTROLLER.searchForClaim(claim).then(function (searchRes) {
+          if (!searchRes.candidates.length) {
+            // 无候选：区分"无需验证不该走到这"（扫描层已过滤），此处即 no_source
+            return { verdict: 'no_source', detail: '搜索无结果', evidences: [], readErrors: [], queries: searchRes.queries };
+          }
+          return WCC_VERIFY_ENGINE.verifyClaim(claim, searchRes.candidates).then(function (v) {
+            v.queries = searchRes.queries;
+            v.candidates = searchRes.candidates; // 完整候选列表供面板展示
+            return v;
+          });
+        }).then(
+          function (result) { sendResponse({ ok: true, verification: result }); },
+          function (err) { sendResponse({ ok: false, reason: String(err && err.message || 'verify_failed') }); }
+        );
+      })(message.claim);
+      return true; // 异步响应
 
     default:
       return false;

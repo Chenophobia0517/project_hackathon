@@ -1,0 +1,225 @@
+// 证据验证引擎（V2.0 N3）：Claim + 候选来源原文 → 逐源判定 → 五态结论。
+// 升级要求 §8：必须区分 来源存在 ≠ 来源相关 ≠ 来源支持 Claim；
+// §9：五态严格互斥 not_needed / no_source / unsupported / partial / supported，不得混用。
+(function (global) {
+  'use strict';
+
+  var CONFIG = global.QIUZHEN_CONFIG || null;
+
+  var VERDICTS = ['not_needed', 'no_source', 'unsupported', 'partial', 'supported'];
+
+  var VERDICT_NAMES = {
+    not_needed: '无需验证',
+    no_source: '未找到可靠来源',
+    unsupported: '来源不支持',
+    partial: '部分支持',
+    supported: '支持'
+  };
+
+  // ---------- 单源判定 prompt ----------
+
+  var SINGLE_PROMPT = [
+    '你是严谨的事实核查员。给你一个【声明】和一个【来源原文】。',
+    '请判断该来源对声明的支持程度，严格区分三个层次：',
+    '- 来源存在 ≠ 来源相关：内容主题无关即 irrelevant；',
+    '- 来源相关 ≠ 支持：提到同一话题但数据/结论与声明不符即 contradict 或 insufficient；',
+    '- 支持分两档：full（核心信息一致且数字/事实准确）/ partial（支持部分内容，但原文有扩大、简化或推断）。',
+    '',
+    '判定枚举：',
+    '- irrelevant：来源与声明主题不相关；',
+    '- insufficient：相关但信息不足以下结论；',
+    '- contradict：相关且与声明矛盾（须引用矛盾点）；',
+    '- full：支持核心声明（须引用支持片段）；',
+    '- partial：部分支持（须说明哪部分支持、哪部分不符）。',
+    '',
+    '要求：verdict 引用的 quote 必须是来源原文的**逐字片段**（≤80字）；找不到逐字依据就不要编造。',
+    '只输出 JSON：{"verdict":"full|partial|irrelevant|insufficient|contradict","quote":"来源原文片段","analysis":"一句话分析"}'
+  ].join('\n');
+
+  // ---------- JSON 提取（与 analyzer 同策略） ----------
+
+  function extractJson(text) {
+    if (!text) throw new Error('empty_response');
+    var start = text.indexOf('{');
+    if (start < 0) throw new Error('no_json_in_response');
+    var depth = 0, inStr = false, esc = false;
+    for (var i = start; i < text.length; i++) {
+      var ch = text[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) return JSON.parse(text.slice(start, i + 1));
+      }
+    }
+    throw new Error('unbalanced_json');
+  }
+
+  function callLLM(system, user) {
+    var body = {
+      model: CONFIG.DEEPSEEK_MODEL,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ],
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      max_tokens: 1500
+    };
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, 45000);
+    return fetch(CONFIG.DEEPSEEK_BASE_URL + '/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + CONFIG.DEEPSEEK_API_KEY
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    }).then(function (resp) {
+      clearTimeout(timer);
+      if (!resp.ok) throw new Error('http_' + resp.status);
+      return resp.json();
+    }).then(function (data) {
+      var content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+      if (!content) throw new Error('empty_response');
+      return extractJson(content);
+    });
+  }
+
+  // ---------- 单源判定 ----------
+
+  // candidate: {url, title, content?, snippet?, sourceType, whitelist, score}
+  // 返回 Promise<candidate & {judgment}>
+  function judgeOne(candidate, claim) {
+    var sourceText = candidate.content || candidate.snippet || '';
+    if (!sourceText || sourceText.length < 30) {
+      candidate.judgment = { verdict: 'insufficient', quote: '', analysis: '未能读取来源正文，仅凭摘要无法判定' };
+      return Promise.resolve(candidate);
+    }
+    var user = '【声明】' + claim.text + '\n\n【来源标题】' + (candidate.title || '') + '\n\n【来源原文】\n' + sourceText.slice(0, 4000);
+    return callLLM(SINGLE_PROMPT, user).then(function (j) {
+      var v = j.verdict;
+      if (['full', 'partial', 'irrelevant', 'insufficient', 'contradict'].indexOf(v) < 0) v = 'insufficient';
+      candidate.judgment = {
+        verdict: v,
+        quote: String(j.quote || '').slice(0, 200),
+        analysis: String(j.analysis || '').slice(0, 300)
+      };
+      return candidate;
+    }).catch(function () {
+      // LLM 失败重试一次
+      return callLLM(SINGLE_PROMPT, user).then(function (j) {
+        candidate.judgment = {
+          verdict: j.verdict,
+          quote: String(j.quote || '').slice(0, 200),
+          analysis: String(j.analysis || '').slice(0, 300)
+        };
+        return candidate;
+      }).catch(function () {
+        candidate.judgment = { verdict: 'insufficient', quote: '', analysis: '判定服务暂不可用' };
+        return candidate;
+      });
+    });
+  }
+
+  // ---------- 多源综合 → 五态结论（§9） ----------
+
+  var VERDICT_WEIGHT = { full: 3, partial: 1, irrelevant: 0, insufficient: 0, contradict: -2 };
+
+  function aggregate(candidates, claimMeta) {
+    var judged = candidates.filter(function (c) { return c.judgment; });
+    if (!judged.length) return { verdict: 'no_source', detail: '没有可判定的来源' };
+
+    var full = judged.filter(function (c) { return c.judgment.verdict === 'full'; });
+    var partial = judged.filter(function (c) { return c.judgment.verdict === 'partial'; });
+    var contradict = judged.filter(function (c) { return c.judgment.verdict === 'contradict'; });
+    var relevant = judged.filter(function (c) { return ['full', 'partial', 'contradict'].indexOf(c.judgment.verdict) >= 0; });
+
+    if (!relevant.length) return { verdict: 'no_source', detail: '找到候选但均与声明不相关或信息不足' };
+
+    // 权威加权：score 前 50% 的来源意见权重 ×1.5
+    var sortedByScore = judged.slice().sort(function (a, b) { return (b.score || 0) - (a.score || 0); });
+    var halfCount = Math.max(1, Math.ceil(sortedByScore.length / 2));
+    var topSet = {};
+    sortedByScore.slice(0, halfCount).forEach(function (c) { topSet[c.url] = true; });
+
+    var supportW = 0, contraW = 0;
+    judged.forEach(function (c) {
+      var w = VERDICT_WEIGHT[c.judgment.verdict] * (topSet[c.url] ? 1.5 : 1);
+      if (w > 0) supportW += w; else contraW -= w;
+    });
+
+    var verdict;
+    if (contraW > supportW && contradict.length > 0) verdict = 'unsupported';
+    else if (supportW >= contraW && full.length > 0 && partial.length === 0) verdict = 'supported';
+    else if (full.length > 0 || partial.length > 0) verdict = 'partial';
+    else verdict = 'no_source';
+
+    return {
+      verdict: verdict,
+      detail: '支持权重 ' + Math.round(supportW * 10) / 10 + ' / 反对权重 ' + Math.round(contraW * 10) / 10 +
+              '（有效来源 ' + relevant.length + '/' + judged.length + '）'
+    };
+  }
+
+  // ---------- 主流程 ----------
+
+  // verifyClaim({text, sourceRequirement}, candidates) ->
+  //   Promise<{verdict, detail, evidences:[{url,title,sourceType,judgment}], readErrors:[...]}>
+  function verifyClaim(claim, candidates) {
+    if (!CONFIG || !CONFIG.DEEPSEEK_API_KEY) return Promise.reject(new Error('config_missing'));
+    if (!candidates || !candidates.length) {
+      return Promise.resolve({ verdict: 'no_source', detail: '搜索无结果', evidences: [], readErrors: [] });
+    }
+
+    // Top-N 截断（T-4：控制读原文成本）
+    var TOP_N = Math.min(candidates.length, 3);
+    var top = candidates.slice(0, TOP_N);
+
+    // 读原文（N2）
+    return global.WCC_WEB_READER.readAll(top).then(function (withContent) {
+      // 串行逐源判定（避免并发撞限流）
+      var chain = Promise.resolve([]);
+      withContent.forEach(function (cand) {
+        chain = chain.then(function (acc) {
+          return judgeOne(cand, claim).then(function (judged) { acc.push(judged); return acc; });
+        });
+      });
+      return chain.then(function (judgedAll) {
+        var agg = aggregate(judgedAll, claim);
+        return {
+          verdict: agg.verdict,
+          detail: agg.detail,
+          evidences: judgedAll.map(function (c) {
+            return {
+              url: c.url,
+              title: c.title || c.url,
+              sourceType: c.sourceType,
+              whitelistTier: c.whitelist ? c.whitelist.tier : 'allow',
+              origin: c.origin,
+              judgment: c.judgment,
+              hadFullText: !!c.content,
+              readError: c.readError || null
+            };
+          }),
+          readErrors: judgedAll.filter(function (c) { return c.readError; }).map(function (c) { return { url: c.url, reason: c.readError }; })
+        };
+      });
+    });
+  }
+
+  global.WCC_VERIFY_ENGINE = {
+    verifyClaim: verifyClaim,
+    judgeOne: judgeOne,
+    aggregate: aggregate,
+    VERDICTS: VERDICTS,
+    VERDICT_NAMES: VERDICT_NAMES
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : self);

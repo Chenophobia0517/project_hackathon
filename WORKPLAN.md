@@ -173,7 +173,13 @@ PRD 要求 Key 不进前端、必须有 Backend。两个选项：
 | N4 | `4061860` | 求异真实来源化：挖掘真实对立观点（逐字引用+URL），禁止编造 | 6/6 |
 | N5 | `da7f19c` | 扫描/询问双模式分离：differ 注入真实对立观点 | 4/4 |
 | N6 | `7e79259` | UI：悬浮球拖动/位置记忆/下移(56px) + Claim 定位回网页高亮 | 注入链模拟通过* |
-| N7 | 本提交 | 回归+验收+文档+tag v2.0 | 见下 |
+| N7 | `75b46e2` | 回归+验收+文档+tag v2.0 | 见下 |
+| 修复 | `47a6ef9` | **hover 打标全失效**：N6 patch 误删 wrapClaim 的 `var span` 声明 → ReferenceError 中断全部打标；恢复声明 + activate 单条 try/catch 防御 | 行为级 6/6 + 7/7 |
+
+> 修复验证（hermes-verify-hoverfix/run.js 6/6 + hermes-verify-hover-span-fix/run.js 7/7）：
+> T1 打标 wrapped=2（修复 ReferenceError）/ T3 坏条目跳过好条目仍打标 /
+> T4 deactivate→activate 无残留 / T6 mouseover 监听注册（hover 卡片入口恢复）。
+> 教训：patch 后必须跑**行为级**验证（激活打标循环），只测文件加载会漏掉此类回归。
 
 ## 已知环境问题（非代码缺陷）
 

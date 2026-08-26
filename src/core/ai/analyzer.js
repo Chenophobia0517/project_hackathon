@@ -33,11 +33,12 @@
     ].join('\n'),
     differ: [
       '你是多元视角分析助手。用户给你一段网页中选中的话（Claim）及其出处，请呈现不同立场与被忽略的维度。',
+      '注意：本模式仅用于用户主动选中文本的深入语义分析。若系统已提供「真实来源的不同观点」（differSources 字段），你必须优先基于它们作答，禁止编造立场。',
       '要求：',
       '1. currentStance：概括当前内容的立场倾向。',
-      '2. viewpoints：2~4 个不同立场。每项固定字段：stance(中文短语如 乐观派/谨慎派/怀疑派)、point(核心论点)、reason(主要理由)。立场必须有实质差异，不是同义反复。',
+      '2. viewpoints：2~4 个不同立场。每项固定字段：stance(中文短语如 乐观派/谨慎派/怀疑派)、point(核心论点)、reason(主要理由)。立场必须有实质差异，不是同义反复。若 differSources 非空，每个 viewpoint 必须对应其中一条真实来源（sourceUrl 字段填其 URL），不得虚构立场数量。',
       '3. blindSpots：1~4 个当前内容较少讨论但重要的维度（认知盲区）。每项固定字段：topic(维度名)、why(为什么重要)。',
-      '4. 观点要能代表真实世界中存在的讨论，不虚构边缘立场。',
+      '4. 观点要能代表真实世界中存在的讨论，不虚构边缘立场。若 differSources 为空数组且你无法确知真实讨论存在，viewpoints 可以为空数组并在 currentStance 中说明「暂未找到可靠的不同观点」。',
       '5. 输出 JSON 必须包含全部字段：currentStance、viewpoints、blindSpots。',
       '6. 只输出 JSON，不要输出任何其他文字。'
     ].join('\n')
@@ -204,23 +205,46 @@
 
   // analyze(mode, payload) -> Promise<result>
   // result: { mode, result, cached, sources?, verified }
+  // V2.0 N5 双模式分离：本入口是「主动询问」链路（用户选中/Hover 点击），
+  // 允许深入语义判断；「自动扫描」走 claim-detector（只发现+分类+定位，不验证）。
+  // differ 模式额外注入真实不同立场来源（N4），禁止 AI 编造。
   function analyze(mode, payload) {
     if (!SYSTEM_PROMPTS[mode]) return Promise.reject(new Error('unknown_mode'));
     var key = cacheKey(mode, String(payload.selectedText || ''), payload.url);
     return cacheGet(key).then(function (hit) {
       if (hit) return { mode: mode, result: hit.result, cached: true, sources: hit.sources, verified: hit.verified };
 
+      // differ 模式：先挖真实对立观点，作为 differSources 注入 prompt（§10）
+      var differPrep = (mode === 'differ' && WCC_SEARCH_CONTROLLER && WCC_SEARCH_CONTROLLER.searchForClaim)
+        ? WCC_SEARCH_CONTROLLER.searchForClaim({ text: payload.selectedText, sourceRequirement: 'any' })
+            .then(function (sr) { return sr.candidates.length ? WCC_VERIFY_ENGINE.discoverDifferViewpoints({ text: payload.selectedText }, sr.candidates) : { found: false, viewpoints: [] }; })
+            .then(function (d) {
+              if (!d.viewpoints.length) return '';
+              var lines = ['【系统检索到的真实不同观点（必须优先基于这些作答，禁止编造）】'];
+              d.viewpoints.forEach(function (v, i) {
+                lines.push((i + 1) + '. ' + v.viewpoint + '（来源: ' + v.title + ' ' + v.url + '；原文片段:「' + v.quote + '」）');
+              });
+              return lines.join('\n');
+            }).catch(function () { return ''; })
+        : Promise.resolve('');
+
       var query = buildQuery(payload.selectedText);
       // 知乎数据源可用 → 先检索再分析；不可用 → 直接分析（verified=false）
-      var prep = WCC_DATASOURCE && WCC_DATASOURCE.isAvailable() && query.length >= 4
-        ? WCC_DATASOURCE.searchBoth(query).catch(function () { return null; })
-        : Promise.resolve(null);
+      var prep = Promise.all([
+        (WCC_DATASOURCE && WCC_DATASOURCE.isAvailable() && query.length >= 4)
+          ? WCC_DATASOURCE.searchBoth(query).catch(function () { return null; })
+          : Promise.resolve(null),
+        differPrep
+      ]);
 
-      return prep.then(function (sources) {
-        return callDeepseek(mode, payload, formatSourcesForPrompt(sources)).catch(function (err) {
+      return prep.then(function (r) {
+        var sources = r[0];
+        var extra = r[1];
+        var contextText = [formatSourcesForPrompt(sources), extra].filter(Boolean).join('\n\n');
+        return callDeepseek(mode, payload, contextText).catch(function (err) {
           if (String(err.message).indexOf('missing_fields') === 0 ||
               err.message === 'unbalanced_json' || err.message === 'no_json_in_response') {
-            return callDeepseek(mode, payload, formatSourcesForPrompt(sources));
+            return callDeepseek(mode, payload, contextText);
           }
           throw err;
         }).then(function (parsed) {

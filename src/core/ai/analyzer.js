@@ -244,9 +244,11 @@
 
       var query = buildQuery(payload.selectedText);
       // V2.5：truth 模式走完整溯源管线（verifyClaimV25）；其他模式维持知乎双通道
+      // V2.5 修复：sourceRequirement 与 objectType 是两套枚举，原样传递，
+      // 由 query-analyzer 的 REQUIREMENT_TO_TYPE 映射（此前误当 objectType 导致 media→fact→单路知乎）
       var prep = (mode === 'truth' && global.WCC_V25)
         ? global.WCC_V25.verifyClaimV25(
-            { text: payload.selectedText, objectType: payload.__sourceRequirement === 'any' ? 'fact' : payload.__sourceRequirement, id: payload.__claimId }
+            { text: payload.selectedText, sourceRequirement: payload.__sourceRequirement || 'any', id: payload.__claimId }
           ).then(function (v) {
             return { v25: v, sources: null, extra: '' };
           }).catch(function () { return { v25: null, sources: null, extra: '' }; })

@@ -10,8 +10,10 @@
   // ---------- 问题类型 → 策略的静态映射（兜底 + LLM 结果校验用） ----------
   // questionType: fact(事实查询) / academic(学术) / policy(政策) / event(时事事件) /
   //               data(数据核实) / open(开放研究)
+  // V2.5 修复：fact 不再单路知乎——外部引擎可用时优先 metaso 广泛召回，
+  // 引擎缺席时 resolveEngines 自动回落 zhihu_global（TQ3），此处按理想拓扑书写
   var TYPE_STRATEGY = {
-    fact:     { engines: ['zhihu_global'], preferredSources: ['gov', 'media'], timeWindow: null,        budget: 1, dualEngine: false },
+    fact:     { engines: ['metaso', 'zhihu_global'], preferredSources: ['gov', 'media'], timeWindow: null,        budget: 2, dualEngine: false },
     academic: { engines: ['zhihu_global', 'exa'], preferredSources: ['acad', 'paper'], timeWindow: '5y',   budget: 2, dualEngine: true },
     policy:   { engines: ['metaso', 'zhihu_global'], preferredSources: ['gov'],      timeWindow: '3y',   budget: 2, dualEngine: true },
     event:    { engines: ['metaso', 'zhihu_global'], preferredSources: ['media'],    timeWindow: '1y',   budget: 2, dualEngine: true },
@@ -24,6 +26,20 @@
     fact: 'fact', data: 'data', research_report: 'academic', paper: 'academic',
     gov_document: 'policy', org_info: 'fact', media_report: 'event',
     person_event: 'event', opinion: 'open', rhetoric: 'open', plain: 'fact'
+  };
+
+  // claim.sourceRequirement → questionType 映射（V2.5 修复：sourceRequirement 是
+  // claim-detector 的独立枚举 gov/acad/official/media/industry/corporate/community/any，
+  // 不能混用 OBJECT_TO_TYPE——此前误用导致 media→fact→单路知乎）
+  var REQUIREMENT_TO_TYPE = {
+    gov: 'policy',        // 需要政府来源 → 政策类检索策略
+    acad: 'academic',     // 需要科研/论文
+    official: 'fact',     // 官方组织 → 事实查询（org 来源）
+    media: 'event',       // 权威媒体 → 时事事件类（多引擎+1y 窗）
+    industry: 'open',     // 行业媒体 → 开放研究（双引擎）
+    corporate: 'fact',    // 企业官方
+    community: 'open',    // 社区讨论 → 开放探索
+    any: null             // 不限 → 走 LLM 判定或 objectType 映射
   };
 
   function validType(t) { return !!TYPE_STRATEGY[t]; }
@@ -120,7 +136,12 @@
   }
 
   function ruleFallback(claim) {
-    var t = OBJECT_TO_TYPE[claim.objectType] || 'fact';
+    // 兜底优先级：sourceRequirement（若提供且可映射）> objectType > fact
+    var t = null;
+    if (claim && claim.sourceRequirement && REQUIREMENT_TO_TYPE[claim.sourceRequirement]) {
+      t = REQUIREMENT_TO_TYPE[claim.sourceRequirement];
+    }
+    if (!t) t = OBJECT_TO_TYPE[claim.objectType] || 'fact';
     var strategy = sanitizeStrategy(null, t);
     strategy.viaFallback = true;
     return strategy;
@@ -129,13 +150,19 @@
   // ---------- 对外入口 ----------
 
   // analyzeQuery(claim) -> Promise<strategy>
+  // claim 推荐携带：text（必需）、objectType、sourceRequirement（两者都传时映射更准）
   // strategy: { questionType, keywords, preferredSources, timeWindow, budget, dualEngine, viaFallback? }
   function analyzeQuery(claim) {
     if (!CONFIG || !CONFIG.DEEPSEEK_API_KEY) {
       return Promise.resolve(ruleFallback(claim)); // 无凭证 → 纯规则（仍可用）
     }
     return callLLM(claim.text).then(function (raw) {
-      var st = sanitizeStrategy(raw, OBJECT_TO_TYPE[claim.objectType] || 'fact');
+      var fallbackT = null;
+      if (claim.sourceRequirement && REQUIREMENT_TO_TYPE[claim.sourceRequirement]) {
+        fallbackT = REQUIREMENT_TO_TYPE[claim.sourceRequirement];
+      }
+      if (!fallbackT) fallbackT = OBJECT_TO_TYPE[claim.objectType] || 'fact';
+      var st = sanitizeStrategy(raw, fallbackT);
       st.viaFallback = false;
       return st;
     }).catch(function () {
@@ -147,7 +174,8 @@
     analyzeQuery: analyzeQuery,
     ruleFallback: ruleFallback,
     TYPE_STRATEGY: TYPE_STRATEGY,
-    OBJECT_TO_TYPE: OBJECT_TO_TYPE
+    OBJECT_TO_TYPE: OBJECT_TO_TYPE,
+    REQUIREMENT_TO_TYPE: REQUIREMENT_TO_TYPE
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
 

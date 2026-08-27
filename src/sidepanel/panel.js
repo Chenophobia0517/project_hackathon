@@ -150,7 +150,8 @@
               result: resp.analysis.result,
               cached: resp.analysis.cached,
               verified: resp.analysis.verified,
-              sources: resp.analysis.sources
+              sources: resp.analysis.sources,
+              verification: resp.analysis.verification || null // V2.5 溯源管线结果
             };
             // 记录概览"已核实"（从本文概览进入的求真）
             if (mode === 'truth' && state.claimPayload.__claimId && resp.analysis.result && resp.analysis.result.supportLevel) {
@@ -197,9 +198,52 @@
     var c1 = cardWith('支持程度');
     c1.appendChild(el('span', 'badge ' + esc(result.supportLevel), SUPPORT_BADGES[result.supportLevel] || result.supportLevel));
     c1.appendChild(el('div', 'summary-text', esc(result.summary)));
+    // V2.5：策略与证据统计行（问题类型/引擎/独立证据数）
+    var st = entry && entry.verification && entry.verification.strategy;
+    var stats = entry && entry.verification && entry.verification.stats;
+    if (st || stats) {
+      var metaParts = [];
+      if (st) {
+        var TYPE_NAMES = { fact: '事实查询', academic: '学术问题', policy: '政策问题', event: '时事事件', data: '数据核实', open: '开放研究' };
+        metaParts.push(TYPE_NAMES[st.questionType] || st.questionType);
+        if (st.degradedExternal) metaParts.push('外部引擎未配置·已降级');
+      }
+      if (stats) {
+        metaParts.push('候选 ' + stats.uniqueCount + ' · 独立证据 ' + stats.clusterCount + '（去重前 ' + stats.rawCount + '）');
+      }
+      var metaLine = el('div', 'v25-meta');
+      metaLine.appendChild(el('span', 'v25-meta-text', esc(metaParts.join(' · '))));
+      c1.appendChild(metaLine);
+    }
     pane.appendChild(c1);
 
-    // 联网检索到的来源（M3：知乎开放平台；origin 区分知乎站内/全网）
+    // V2.5 溯源来源（verifyClaimV25 候选列表：已排序、带六维评分与 whyText）
+    var v25Candidates = entry && entry.verification && entry.verification.candidates;
+    if (Array.isArray(v25Candidates) && v25Candidates.length) {
+      var cs25 = cardWith('溯源来源（按可信度排序 · 前 ' + Math.min(8, v25Candidates.length) + '）');
+      v25Candidates.slice(0, 8).forEach(function (it) {
+        var line = el('div', 'src-line v25-src-line');
+        var a = el('a', 'src-link', esc(it.title || '(无标题)'));
+        a.href = it.url; a.target = '_blank'; a.rel = 'noopener';
+        line.appendChild(a);
+        // 类型徽章（source-analyzer 结果）
+        var TYPE_BADGE = { gov: '政府', acad: '科研', paper: '论文', media: '媒体', org: '组织', biz: '企业', zhihu: '知乎', other: '网页' };
+        var badgeTxt = TYPE_BADGE[it.sourceAnalysis && it.sourceAnalysis.sourceType] || '网页';
+        if (it.registryInfo && it.registryInfo.tier === 'verified') badgeTxt = '✓' + badgeTxt;
+        line.appendChild(el('span', 'src-badge', esc(badgeTxt)));
+        // 一手性标记
+        if (it.sourceAnalysis && it.sourceAnalysis.originality === 'original') {
+          line.appendChild(el('span', 'src-original', '一手'));
+        } else if (it.suspectedSyndication) {
+          line.appendChild(el('span', 'src-synd', '疑似转载'));
+        }
+        line.appendChild(el('div', 'src-why', esc(it.whyText || '')));
+        cs25.appendChild(line);
+      });
+      pane.appendChild(cs25);
+    }
+
+    // 兼容 V2.0 结构的检索来源（知乎双通道 origin 分组）
     var srcs = entry && entry.sources;
     var srcItems = srcs ? (srcs.zhihu || []).concat(srcs.global || []) : [];
     if (srcItems.length) {

@@ -96,7 +96,8 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
               result: res.result,
               cached: res.cached,
               verified: res.verified,
-              sources: res.sources || null
+              sources: res.sources || null,
+              verification: res.verification || null // V2.5 溯源管线结果
             }
           });
         },

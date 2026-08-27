@@ -190,6 +190,20 @@
   }
 
   // 检索结果压缩为注入 prompt 的文本块（控制 token）
+  // V2.5：溯源候选压缩为注入 prompt 的文本块（含排序/类型/一手性/whyText）
+  function formatV25EvidenceForPrompt(v25) {
+    if (!v25 || !Array.isArray(v25.candidates) || !v25.candidates.length) return '';
+    var lines = ['【溯源检索结果（按可信度排序，前 5）】'];
+    v25.candidates.slice(0, 5).forEach(function (it, i) {
+      var a = it.sourceAnalysis || {};
+      lines.push((i + 1) + '.[' + (a.sourceType || 'other') + '|' +
+        (a.originality === 'original' ? '一手' : it.suspectedSyndication ? '疑似转载' : '二手') +
+        '|score=' + it.scoreTotal + '] ' + (it.title || '') + ' ' + (it.url || '') + '：' +
+        String(it.snippet || '').slice(0, 100));
+    });
+    return lines.join('\n');
+  }
+
   function formatSourcesForPrompt(sources) {
     if (!sources || (!sources.zhihu.length && !sources.global.length)) return '';
     var lines = ['【联网检索结果（知乎开放平台）】'];
@@ -229,18 +243,26 @@
         : Promise.resolve('');
 
       var query = buildQuery(payload.selectedText);
-      // 知乎数据源可用 → 先检索再分析；不可用 → 直接分析（verified=false）
-      var prep = Promise.all([
+      // V2.5：truth 模式走完整溯源管线（verifyClaimV25）；其他模式维持知乎双通道
+      var prep = (mode === 'truth' && global.WCC_V25)
+        ? global.WCC_V25.verifyClaimV25(
+            { text: payload.selectedText, objectType: payload.__sourceRequirement === 'any' ? 'fact' : payload.__sourceRequirement, id: payload.__claimId }
+          ).then(function (v) {
+            return { v25: v, sources: null, extra: '' };
+          }).catch(function () { return { v25: null, sources: null, extra: '' }; })
+        : Promise.all([
         (WCC_DATASOURCE && WCC_DATASOURCE.isAvailable() && query.length >= 4)
           ? WCC_DATASOURCE.searchBoth(query).catch(function () { return null; })
           : Promise.resolve(null),
         differPrep
-      ]);
+      ]).then(function (r) { return { sources: r[0], extra: r[1] }; });
 
       return prep.then(function (r) {
-        var sources = r[0];
-        var extra = r[1];
-        var contextText = [formatSourcesForPrompt(sources), extra].filter(Boolean).join('\n\n');
+        var sources = r.sources;
+        var extra = r.extra;
+        var v25 = r.v25 || null;
+        var contextText = [formatSourcesForPrompt(sources), extra,
+          v25 && v25.candidates ? formatV25EvidenceForPrompt(v25) : ''].filter(Boolean).join('\n\n');
         return callDeepseek(mode, payload, contextText).catch(function (err) {
           if (String(err.message).indexOf('missing_fields') === 0 ||
               err.message === 'unbalanced_json' || err.message === 'no_json_in_response') {
@@ -248,9 +270,10 @@
           }
           throw err;
         }).then(function (parsed) {
-          var entry = { result: parsed, at: Date.now(), sources: sources, verified: !!sources };
+          var verifiedSources = !!sources || !!(v25 && v25.candidates && v25.candidates.length);
+          var entry = { result: parsed, at: Date.now(), sources: sources, verified: verifiedSources, verification: v25 };
           cacheSet(key, entry);
-          return { mode: mode, result: parsed, cached: false, sources: sources, verified: !!sources };
+          return { mode: mode, result: parsed, cached: false, sources: sources, verified: verifiedSources, verification: v25 };
         });
       });
     });

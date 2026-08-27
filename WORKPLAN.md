@@ -284,6 +284,35 @@ M0~M7 合计约 **4~6 天**（单引擎联调视 TQ2 进度浮动 ±1 天）：
 
 V2.5 批准记录：已批准（2026-08-27），开始执行 M0。
 
+## V2.5 执行记录 ✅ 全部完成
+
+| 里程碑 | 提交 | 内容 | 验证 |
+|---|---|---|---|
+| M0 | `db0f30a` | Query Analyzer：六类问题类型→策略 JSON（LLM+规则兜底） | 真实 11/11 |
+| M1 | `d801fdb` | url-utils 规范化去重 + datasource 多引擎（metaso/Exa） | 真实 12/12 |
+| M2 | `2267b68` | Trusted Source Registry 三层先验表（verified/candidate/restricted） | smoke 9/9 |
+| M3 | `9fa5be7` | source-analyzer LLM 来源理解（类型/一手性/机构，(domain+path) 缓存） | 真实 8/8 |
+| M4 | `c2d3bb8` | evidence-graph 转载识别与证据簇（标题+摘要 Dice 双阈值，保守标疑似） | smoke PASS |
+| M5 | `31bb6aa` | Scoring Engine 六维分离评分 + v25-pipeline 全链路编排 | 真实 13/13 |
+| M6 | `433b03e` | panel 溯源展示升级 + truth 模式接入 V2.5 管线 | 真实端到端 6/6 |
+| M7 | 本提交 | 回归+验收+文档+tag v2.5 | 回归全过 |
+
+### 关键实现事实
+- **metaso 真实 API 探明**：`https://metaso.cn/api/v1/search`（响应 webpages[]，字段 link/date/score；
+  文档中 playground 地址实为 HTML 页面）——端点经 metaso_endpoint.txt 可覆盖（TQ2 落地）
+- **TQ3 落地**：metaso/exa 未配置时知乎通道兜底，策略标记 degradedExternal 并在面板明示
+- **§6 分离验证**：官方一手 gov（auth=95 orig=95）vs 媒体转载（auth=70 orig=45）——
+  权威与一手独立计分，转载页同簇 ×0.75 排序降权
+- **§9 独立证据**：GDP 声明 10 条候选 → 按簇计数 independentCount；sameAsOriginal 记录引用关系
+- **§10 展示**：来源卡 = 类型徽章+✓verified+一手/疑似转载标记+whyText 一句话解释；
+  支持程度卡显示「问题类型·候选 N·独立证据 N」
+
+### V2.5 验收清单对照（升级要求 §13）
+- [x] 搜索：Query Analyzer 判类型（B 组真实三例）；metaso/Exa 按策略调用（C/D/E 真实联调）；多源合并；URL 规范化去重（A 组含等价 URL 用例）
+- [x] 来源：Registry 三层工作正常（smoke 9 例）；基本来源类型识别（真实 LLM gov/paper/zhihu 判对）；一手二手区分（originality 三级+置信度）；Authority 与 Originality 分离（A2 断言）
+- [x] 证据：引用关系记录（sameAsOriginal）；重复转载不计独立证据（聚簇×降权）；可点击原始 URL（溯源卡链接）；无来源 vs 无需验证五态互斥（V2.0 延续）
+- [x] 回归：claim-detector v2（N0 11/11）、hover 行为（7/7+11/11）、求深链路（走 V2.0 知乎通道 verification=null 预期）、Web Reader/扩展交互未被触碰
+
 ---
 
 ## 五、风险与应对

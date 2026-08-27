@@ -23,6 +23,26 @@
 
   // ---------- 策略级会话缓存（TQ5）----------
   var strategyCache = {}; // claim.text -> strategy
+  // 页面级上下文缓存（upgrade.md §5/§14：同页多次验证免重复抓取；10 条 / 10 分钟）
+  var pageFetchCache = {};
+  function fetchPageContext(url) {
+    if (!url || !/^https?:\/\//i.test(String(url))) return Promise.resolve(null);
+    var hit = pageFetchCache[url];
+    if (hit && Date.now() - hit.at < 10 * 60 * 1000) return Promise.resolve(hit);
+    return READER.readUrl(url, { wantHtml: true }).then(function (r) {
+      var entry = r.ok ? {
+        ok: true,
+        text: r.text,
+        title: r.title,
+        links: (ET && ET.extractExplicitSourcesFromHtml) ? ET.extractExplicitSourcesFromHtml(r.html) : [],
+        at: Date.now()
+      } : { ok: false, at: Date.now() };
+      var keys = Object.keys(pageFetchCache);
+      if (keys.length >= 10) delete pageFetchCache[keys[0]];
+      pageFetchCache[url] = entry;
+      return entry;
+    }).catch(function () { return null; });
+  }
 
   // search_advise §5.1：取消硬路由——所有问题类型都跑 Exa + Metaso 双核召回，
   // Zhihu 只做低配额社区补充；questionType 只影响各引擎预算配额，不再排除任何引擎。
@@ -89,6 +109,7 @@
     var claimText = String(claim.text || '');
 
     // ① 前置决策层（upgrade.md Phase1）：Evidence Targeting（与 Query Analyzer 并行，省一次串行等待）
+    //    同时并行抓取文章页 HTML——论文超链接（<a href>）只有抓页面才能拿到（upgrade.md §14）
     var cachedStrategy = strategyCache[claimText];
     var strategyP = cachedStrategy
       ? Promise.resolve(cachedStrategy)
@@ -98,10 +119,17 @@
           return s;
         });
     var targetP = (ET && ET.analyze) ? ET.analyze(claim, context) : Promise.resolve(null);
+    var pageP = fetchPageContext(context.url);
 
-    return Promise.all([strategyP, targetP]).then(function (r) {
+    return Promise.all([strategyP, targetP, pageP]).then(function (r) {
       var strategy = r[0];
       var evidenceTarget = r[1];
+      var page = r[2];
+
+      // 页面超链接来源并入（论文以超链接引用时，显式来源从这里来；失败则静默降级）
+      if (page && page.ok && ET && ET.mergeExplicitSources) {
+        ET.mergeExplicitSources(evidenceTarget, page.text, page.links);
+      }
 
       // ② 引擎计划与检索（串行执行各步；显式来源步优先；总候选上限 14）
       var plan = buildPlan(strategy, claimText, evidenceTarget);

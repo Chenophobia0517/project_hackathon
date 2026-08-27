@@ -63,8 +63,28 @@
 
   // ---------- 主流程 ----------
 
-  // readUrl(url) -> Promise<{ ok:true, text, title } | { ok:false, reason }>
-  function readUrl(url) {
+  // 从 HTML 提取 <a href> 链接（upgrade.md §14：论文超链接在 href 属性里，
+  // htmlToText 会丢属性，必须在剥离标签前提取）-> [{href, text}]（去重，上限 50）
+  function extractLinks(html) {
+    var out = [];
+    var seen = {};
+    var re = /<a\s+[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    var m;
+    while ((m = re.exec(html)) !== null && out.length < 50) {
+      var href = String(m[1] || '').trim();
+      var text = String(m[2] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!/^https?:\/\//i.test(href)) continue;
+      if (href.length > 300) continue;
+      if (seen[href]) continue;
+      seen[href] = true;
+      out.push({ href: href, text: text });
+    }
+    return out;
+  }
+
+  // readUrl(url, opts) -> Promise<{ ok:true, text, title, html? } | { ok:false, reason }>
+  // opts.wantHtml=true 时额外返回原始 HTML（供 extractLinks / 显式来源提取使用）
+  function readUrl(url, opts) {
     if (!url || !/^https?:\/\//i.test(url)) {
       return Promise.resolve({ ok: false, reason: 'invalid_url' });
     }
@@ -96,7 +116,9 @@
         if (tm) title = tm[1].replace(/<[^>]+>/g, '').trim().slice(0, 120);
         var text = pickMainBody(htmlToText(html));
         if (text.length < MIN_BODY_LEN) return { ok: false, reason: 'thin_content' };
-        return { ok: true, text: text.slice(0, MAX_TEXT), title: title };
+        var res = { ok: true, text: text.slice(0, MAX_TEXT), title: title };
+        if (opts && opts.wantHtml) res.html = html;
+        return res;
       });
     }).catch(function (err) {
       clearTimeout(timer);
@@ -129,6 +151,7 @@
     readUrl: readUrl,
     readAll: readAll,
     htmlToText: htmlToText,
+    extractLinks: extractLinks,
     MAX_TEXT: MAX_TEXT
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

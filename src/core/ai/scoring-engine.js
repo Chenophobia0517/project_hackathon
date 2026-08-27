@@ -1,7 +1,8 @@
-// Scoring Engine（V2.5 M5）：结构化来源信息 → 六维评分 → 综合排序。
-// 升级要求 §6/§7/§8：
+// Scoring Engine（V2.5 M5 + search_advise §7~§13）：结构化来源信息 → 八维评分 → 综合排序。
+// 升级要求 §6/§7/§8 + search_advise：
 //   - Authority 与 Originality 分离（高权威媒体≠一手来源）；
-//   - 六维：authority/expertise/relevance/originality/evidence/freshness 各 0-100；
+//   - 八维：authority/relevance/directness/entity/scope/temporal/originality/evidence 各 0-100；
+//   - preferredSources 真正进入评分（§6.1）；Evidence Directness / Entity / Geo Scope / Temporal（§8~§11）；
 //   - LLM 只理解来源，本引擎做确定性综合排序；
 //   - 流程：硬过滤 → 分类/分析已由上游完成 → 评分 → 排序。
 (function (global) {
@@ -9,16 +10,18 @@
 
   var REGISTRY = global.WCC_SOURCE_REGISTRY;
 
-  // ---------- 权重（初版固定，注释说明依据） ----------
-  // authority 0.30：来源可靠性根基
-  // relevance 0.25：与 claim 无关的来源没有价值
-  // originality 0.15：一手性独立维度（§6）
-  // evidence 0.12：证据强度（含逐字数据/官方文件特征）
-  // expertise 0.10：领域专业度
-  // freshness 0.08：新近度权重最低——多数声明核对不依赖极新鲜度
+  // ---------- 权重（search_advise §7 / §12：八维综合评分） ----------
+  // authority 0.25：来源可靠性根基（registry 先验 + 类型先验取大）
+  // relevance 0.20：与 claim 关键词重合度（纯文本信号，不再独占高权重）
+  // directness 0.15：是否直接回答当前问题（§8 Evidence Directness）
+  // entity 0.12：来源主体与问题主体是否一致（§9 Entity Match）
+  // scope 0.08：地域范围匹配（§10 Geographic Scope，解决"全国人口 vs 县级报告"）
+  // temporal 0.06：时间匹配（§11 Temporal Match，避免 2023 报告顶替 2025 数据）
+  // originality 0.08：一手性（原始发布 vs 转载/汇编）
+  // evidence 0.06：内容证据强度启发式（数字/官方文件词根）
   var WEIGHTS = {
-    authority: 0.30, relevance: 0.25, originality: 0.15,
-    evidence: 0.12, expertise: 0.10, freshness: 0.08
+    authority: 0.25, relevance: 0.20, directness: 0.15, entity: 0.12,
+    scope: 0.08, temporal: 0.06, originality: 0.08, evidence: 0.06
   };
 
   var SCORE_TYPE = {
@@ -38,6 +41,14 @@
   }
 
   function clamp(v) { return Math.max(0, Math.min(100, Math.round(v))); }
+
+  function hostOf(url) {
+    var m = String(url || '').toLowerCase().match(/^https?:\/\/([^\/?#]+)/);
+    if (!m) return '';
+    var h = m[1];
+    if (h.indexOf('www.') === 0) h = h.slice(4);
+    return h;
+  }
 
   // freshScore(publishedDate|recencyHint)：有时间窗时按年份距当前衰减
   function freshnessScore(item, timeWindow) {
@@ -59,10 +70,11 @@
     return clamp(score);
   }
 
-  // relevanceScore(item, strategy)：snippet/title 与关键词组的重合度（确定性计算）
+  // relevanceScore(item, strategy)：snippet/title 与关键词组（中 + 英）的重合度（确定性计算）
+  // search_advise §3.2：keywordsEn 参与匹配——英文官方页对英文 Query 命中，不再被中文关键词误伤
   function relevanceScore(item, strategy) {
     var text = String((item.title || '') + ' ' + (item.snippet || '')).toLowerCase();
-    var kws = (strategy && strategy.keywords) || [];
+    var kws = [].concat((strategy && strategy.keywords) || [], (strategy && strategy.keywordsEn) || []);
     if (!kws.length) return 60;
     var hits = 0;
     kws.forEach(function (k) {
@@ -77,6 +89,117 @@
     return clamp(hits / kws.length * 100);
   }
 
+  // §8 Evidence Directness：来源是否直接回答当前问题（确定性近似）
+  // 标题命中关键词/聚焦短语/问题数字 = 直接回答的强信号；
+  // 实体官方域直中（如 nasa.gov 回答 NASA 问题）= 第一手口径，直接性加成（§24）
+  function directnessScore(item, strategy, claimText) {
+    var title = String(item.title || '').toLowerCase();
+    var text = String((item.title || '') + ' ' + (item.snippet || '')).toLowerCase();
+    var score = 20; // 基准分
+    var kws = [].concat((strategy && strategy.keywords) || [], (strategy && strategy.keywordsEn) || []);
+    if (kws.length) {
+      var titleHits = 0, textHits = 0;
+      kws.forEach(function (k) {
+        var kl = String(k).toLowerCase();
+        if (!kl) return;
+        if (title.indexOf(kl) >= 0) { titleHits += 1; return; }
+        if (text.indexOf(kl) >= 0) { textHits += 1; return; }
+        // 词组拆部分词（如 "民法典 颁布 时间" → 民法典/颁布/时间）：部分命中计入弱信号
+        var parts = kl.split(/\s+/).filter(function (p) { return p.length >= 2; });
+        if (parts.length > 1) {
+          var titleParts = parts.filter(function (p) { return title.indexOf(p) >= 0; }).length;
+          var textParts = parts.filter(function (p) { return text.indexOf(p) >= 0; }).length;
+          titleHits += titleParts / parts.length;
+          textHits += Math.max(0, textParts - titleParts) / parts.length;
+        }
+      });
+      score += titleHits / kws.length * 55;
+      score += textHits / kws.length * 25;
+    } else {
+      score += 35;
+    }
+    // 问题聚焦短语（questionFocus）：标题含"颁布时间"这类短语 = 直接回答
+    var focus = strategy && strategy.questionFocus ? String(strategy.questionFocus).toLowerCase() : '';
+    if (focus) {
+      if (title.indexOf(focus) >= 0) score += 25;
+      else if (text.indexOf(focus) >= 0) score += 12;
+    }
+    // 问题中的年份/数字出现在来源文本 → 强直接信号（民法典颁布年份 vs 案例实施年份）
+    var nums = String(claimText || '').match(/\d{4}|[\d,.]+(?:万|亿|%)/g) || [];
+    var hasNum = nums.some(function (n) { return text.indexOf(n.toLowerCase()) >= 0; });
+    if (hasNum) score += 15;
+    // 实体官方域直中（§24）：nasa.gov 回答 NASA 问题 = 第一手口径，直接性加成
+    var ents = (strategy && strategy.entities) || [];
+    var host = hostOf(item.url);
+    if (ents.some(function (e) {
+      return (e.domains || []).some(function (d) { return host === d || host.indexOf('.' + d) >= 0; });
+    })) score += 30;
+    return clamp(score);
+  }
+
+  // §9 Entity Match：来源主体 = 问题主体？（实体名命中标题/摘要，或来源域名即实体官方域）
+  function entityMatchScore(item, strategy) {
+    var ents = (strategy && strategy.entities) || [];
+    if (!ents.length) return 50; // 无实体信息：中性
+    var text = String((item.title || '') + ' ' + (item.snippet || '')).toLowerCase();
+    var host = hostOf(item.url);
+    var best = 0;
+    ents.forEach(function (e) {
+      var domains = e.domains || [];
+      // 官方域名直中 → 满分（最强信号，如 nasa.gov 命中 NASA）
+      if (domains.some(function (d) { return host === d || host.indexOf('.' + d) >= 0; })) {
+        if (best < 100) best = 100;
+        return;
+      }
+      var name = String(e.name || '').toLowerCase();
+      if (!name) return;
+      if (text.indexOf(name) >= 0) { if (best < 90) best = 90; return; }
+      // 实体名前缀弱命中（≥3 字时取前 60%）
+      if (name.length >= 3) {
+        var prefix = name.slice(0, Math.max(2, Math.floor(name.length * 0.6)));
+        if (text.indexOf(prefix) >= 0) { if (best < 60) best = 60; }
+      }
+    });
+    return best || 0; // 有实体但来源完全不含实体 → 0（宁可严格）
+  }
+
+  // §10 Geographic Scope Match：问题地域范围 vs 来源主体地域范围
+  var SCOPE_LEVEL = { global: 5, national: 4, province: 3, city: 2, county: 1, unknown: 0 };
+  function scopeMatchScore(item, strategy) {
+    var q = strategy && strategy.scopeLevel;
+    var s = item.sourceAnalysis && item.sourceAnalysis.scopeLevel;
+    if (!q || q === 'unknown' || !s || s === 'unknown') return 50; // 信息不足 → 中性
+    var a = SCOPE_LEVEL[q], b = SCOPE_LEVEL[s];
+    if (a === b) return 100;
+    var diff = Math.abs(a - b);
+    if (diff === 1) return 70;
+    if (diff === 2) return 40;
+    return 20; // 全国 vs 县级 → 严重不匹配（§10 核心场景）
+  }
+
+  // §11 Temporal Match：问题年份 vs 来源发布时间（防止 2023 报告顶替 2025 数据）
+  function temporalMatchScore(item, strategy, claimText) {
+    var m = String(claimText || '').match(/(20\d{2}|19\d{2})年?/);
+    var qYear = m ? Number(m[1]) : null;
+    var srcYear = null;
+    if (item.publishedDate) {
+      var dm = String(item.publishedDate).match(/(20\d{2}|19\d{2})/);
+      if (dm) srcYear = Number(dm[1]);
+    }
+    if (!qYear && !srcYear) return 50;
+    if (!qYear) {
+      if (!srcYear) return 50;
+      var age = new Date().getFullYear() - srcYear;
+      return clamp(age <= 1 ? 85 : age <= 3 ? 70 : age <= 5 ? 55 : 30);
+    }
+    if (!srcYear) return 55; // 问题有年份、来源无年份：不给高分但不惩罚
+    var diff = Math.abs(qYear - srcYear);
+    if (diff === 0) return 100;
+    if (diff === 1) return 80;
+    if (diff === 2) return 60;
+    return clamp(100 - diff * 15);
+  }
+
   // evidenceScore(item)：内容证据强度启发式（数字/百分号/文件词根存在性）
   function evidenceScore(item) {
     var s = String(item.snippet || '');
@@ -88,54 +211,69 @@
     return clamp(score);
   }
 
-  // expertiseScore(analysis)：科研/学术/官方机构在垂直领域的专业度加成
-  function expertiseScore(item) {
-    var a = item.sourceAnalysis || {};
-    var base = { gov: 80, paper: 90, acad: 88, org: 72, media: 62, biz: 58, zhihu: 45, other: 40 }[a.sourceType] || 45;
-    // 有明确机构名 + 领域 → 加成
-    if (a.org) base += 6;
-    if (a.domain) base += 4;
-    return clamp(base);
-  }
-
   // ---------- 对外入口 ----------
 
-  // rank(items, strategy) -> { ranked, filtered }
+  // rank(items, strategy, claimText) -> { ranked, filtered }
   // 前置要求：items 已过 url-utils 归一、source-analyzer 分析、evidence-graph 聚簇。
-  // 每条注入 scores{6维} + total + whyText（「为什么信这个来源」一句话解释）。
-  function rank(items, strategy) {
+  // 每条注入 scores{8维} + prefBonus + scoreTotal + whyText。
+  // §6.1：preferredSources 真正进入评分（来源类型先验加分）；§13：高权威 + 高直接 = 第一优先级。
+  function rank(items, strategy, claimText) {
+    claimText = String(claimText || '');
     var kept = items.filter(hardFilter);
     var filtered = items.length - kept.length;
 
+    var preferred = (strategy && strategy.preferredSources) || [];
+
     kept.forEach(function (it) {
       var reg = it.registryInfo || REGISTRY.lookup(it.url);
-      var typeAuth = SCORE_TYPE[(it.sourceAnalysis && it.sourceAnalysis.sourceType)] || SCORE_TYPE.other;
+      var a = it.sourceAnalysis || {};
+      var st = a.sourceType;
+      var typeAuth = SCORE_TYPE[st] || SCORE_TYPE.other;
 
       var dims = {
         authority: clamp(Math.max(reg.prior, typeAuth)),
         relevance: relevanceScore(it, strategy),
-        originality: SCORE_ORIGINALITY[(it.sourceAnalysis && it.sourceAnalysis.originality)] || SCORE_ORIGINALITY.secondary,
-        evidence: evidenceScore(it),
-        expertise: expertiseScore(it),
-        freshness: freshnessScore(it, strategy && strategy.timeWindow)
+        directness: directnessScore(it, strategy, claimText),
+        entity: entityMatchScore(it, strategy),
+        scope: scopeMatchScore(it, strategy),
+        temporal: temporalMatchScore(it, strategy, claimText),
+        originality: SCORE_ORIGINALITY[a.originality] || SCORE_ORIGINALITY.secondary,
+        evidence: evidenceScore(it)
       };
+
+      // §6.1：preferredSources 作为来源类型先验加分（策略字段必须真正生效）
+      var prefBonus = preferred.indexOf(st) >= 0 ? 8 : 0;
+      // §13 First-Party Bonus：原始发布 + 官方/学术/论文类型
+      var firstPartyBonus = (a.originality === 'original' && (st === 'gov' || st === 'paper' || st === 'acad')) ? 5 : 0;
+      // §17/§18：转载惩罚（媒体数量 ≠ 独立证据数量）
+      var syndPenalty = it.suspectedSyndication ? 6 : 0;
+      // upgrade.md §15/§16：确认是目标论文（TARGET_PAPER）→ 身份奖励
+      var targetPaperBonus = it.paperStatus === 'TARGET_PAPER' ? 6 : 0;
+
       var total = 0;
       for (var k in WEIGHTS) total += dims[k] * WEIGHTS[k];
+      total += (prefBonus + firstPartyBonus + targetPaperBonus - syndPenalty);
 
       it.scores = dims;
+      it.prefBonus = prefBonus;
       it.scoreTotal = clamp(total);
 
-      // 一句话解释（面板展示用）：强项优先级 relevance > originality > authority > freshness
+      // 一句话解释（面板展示用）
       var reasons = [];
       if (reg.tier === 'verified') reasons.push(reg.label || '权威机构');
+      if (it.paperStatus === 'TARGET_PAPER') reasons.push('目标论文');
+      else if (it.paperStatus === 'RELATED_PAPER') reasons.push('相关论文');
+      if (dims.entity >= 90) reasons.push('主体匹配');
+      if (dims.scope >= 100) reasons.push('地域范围匹配');
+      if (dims.directness >= 75) reasons.push('直接回应问题');
+      if (prefBonus) reasons.push('来源类型优先');
       if (dims.originality >= 95) reasons.push('原始发布');
       else if (it.suspectedSyndication) reasons.push('疑似转载自 ' + ((it.sameAsOriginal && it.sameAsOriginal.title) || '').slice(0, 14));
-      if (dims.authority >= 85) reasons.push('来源类型' + ({ gov: '政府', paper: '学术论文', acad: '科研机构', org: '官方组织' }[(it.sourceAnalysis||{}).sourceType] || '权威'));
-      if (dims.freshness >= 80) reasons.push('时效性强');
+      if (dims.authority >= 85) reasons.push('来源类型' + ({ gov: '政府', paper: '学术论文', acad: '科研机构', org: '官方组织' }[st] || '权威'));
       it.whyText = reasons.slice(0, 2).join(' · ') || '综合匹配';
     });
 
-    // 转载页排序降权：同簇内非代表条目总分 ×0.75（不剔除，仍可点击追溯）
+    // 转载页排序降权（§18：同簇内非代表条目总分 ×0.75，不剔除）
     var seenClusterRep = {};
     kept.forEach(function (it) {
       if (it.suspectedSyndication) {
@@ -152,6 +290,11 @@
     rank: rank,
     WEIGHTS: WEIGHTS,
     hardFilter: hardFilter,
-    _internals: { freshnessScore: freshnessScore, relevanceScore: relevanceScore, evidenceScore: evidenceScore, expertiseScore: expertiseScore }
+    _internals: {
+      freshnessScore: freshnessScore, relevanceScore: relevanceScore,
+      evidenceScore: evidenceScore, directnessScore: directnessScore,
+      entityMatchScore: entityMatchScore, scopeMatchScore: scopeMatchScore,
+      temporalMatchScore: temporalMatchScore
+    }
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

@@ -15,10 +15,14 @@
       '1. 先给 Claim 分类（type 字段）：数值/时间/地理/排名比较/科学/法律政策/人物机构/因果关系/预测/主观观点。',
       '2. 若属"主观观点"，supportLevel 固定为 "opinion"，并在 summary 说明"该内容属于观点表达，无需事实溯源"。',
       '3. supportLevel 四选一：supported(有较充分证据支持)/partial(部分支持)/insufficient(证据不足)/unsupported(不支持)。不确定时宁可 insufficient，不要猜测。',
-      '4. evidences 给出 1~4 条支持或反驳的证据。每项固定字段：sourceType(五选一:原始研究/官方资料/权威报告/专业媒体/社区讨论)、point(一句话结论)、detail(简要说明)。无法给出可靠来源时留空数组。',
-      '5. comparison 必须诚实对照"原文说了什么"与"来源实际表达了什么"。固定字段：original(原文表述)、actual(来源实际表达)、gap(差异判断，如把相关性夸大为因果/绝对化/以偏概全)。没有可靠来源时 comparison 为 null。',
-      '6. 输出 JSON 必须包含全部字段：type、supportLevel、summary、evidences、comparison。',
-      '7. 只输出 JSON，不要输出任何其他文字。'
+      '4. 【证据绑定，最高优先级】你只能依据下方【溯源检索结果】中给出的来源作答：',
+      '   - 每个来源都有编号（如 E1、E2…）。evidences 每项必须含 evidenceId 字段，引用对应来源编号；',
+      '   - 若检索结果中没有支持该 Claim 的来源，supportLevel 必须为 insufficient 或 unsupported，evidences 留空数组；',
+      '   - 严禁用你自身的训练知识或上下文推断来"补全"检索结果中不存在的数字/日期/结论。',
+      '5. evidences 给出 1~4 条支持或反驳的证据。每项固定字段：evidenceId(对应检索来源编号，如 "E1")、sourceType(五选一:原始研究/官方资料/权威报告/专业媒体/社区讨论)、point(一句话结论)、detail(简要说明)。无法给出可靠来源时留空数组。',
+      '6. comparison 必须诚实对照"原文说了什么"与"来源实际表达了什么"。固定字段：original(原文表述)、actual(来源实际表达)、gap(差异判断，如把相关性夸大为因果/绝对化/以偏概全)。没有可靠来源时 comparison 为 null。',
+      '7. 输出 JSON 必须包含全部字段：type、supportLevel、summary、evidences、comparison。',
+      '8. 只输出 JSON，不要输出任何其他文字。'
     ].join('\n'),
     deep: [
       '你是深入浅出的知识讲解者。用户给你一段网页中选中的话（Claim），请解释它背后的原理与知识。',
@@ -191,12 +195,13 @@
 
   // 检索结果压缩为注入 prompt 的文本块（控制 token）
   // V2.5：溯源候选压缩为注入 prompt 的文本块（含排序/类型/一手性/whyText）
+  // search_advise §20：每条带编号 E1/E2/...，LLM 的 evidences[].evidenceId 必须引用这些编号
   function formatV25EvidenceForPrompt(v25) {
     if (!v25 || !Array.isArray(v25.candidates) || !v25.candidates.length) return '';
-    var lines = ['【溯源检索结果（按可信度排序，前 5）】'];
+    var lines = ['【溯源检索结果（按可信度排序，前 5；E 编号 = 证据 ID，结论必须绑定这些编号）】'];
     v25.candidates.slice(0, 5).forEach(function (it, i) {
       var a = it.sourceAnalysis || {};
-      lines.push((i + 1) + '.[' + (a.sourceType || 'other') + '|' +
+      lines.push('E' + (i + 1) + '.[' + (a.sourceType || 'other') + '|' +
         (a.originality === 'original' ? '一手' : it.suspectedSyndication ? '疑似转载' : '二手') +
         '|score=' + it.scoreTotal + '] ' + (it.title || '') + ' ' + (it.url || '') + '：' +
         String(it.snippet || '').slice(0, 100));
@@ -248,9 +253,21 @@
       // 由 query-analyzer 的 REQUIREMENT_TO_TYPE 映射（此前误当 objectType 导致 media→fact→单路知乎）
       var prep = (mode === 'truth' && global.WCC_V25)
         ? global.WCC_V25.verifyClaimV25(
-            { text: payload.selectedText, sourceRequirement: payload.__sourceRequirement || 'any', id: payload.__claimId }
+            { text: payload.selectedText, sourceRequirement: payload.__sourceRequirement || 'any', id: payload.__claimId },
+            // upgrade.md §5：Context Extraction 输入（页面上下文，供 Evidence Targeting 使用）
+            { context: { title: payload.title || '', url: payload.url || '', paragraph: payload.selectedText || '', surroundingText: '' } }
           ).then(function (v) {
-            return { v25: v, sources: null, extra: '' };
+            // upgrade.md §32/§31：主体歧义 / 硬校验未通过 → 提示合成层保守作答
+            var caution = '';
+            if (v && v.binding) {
+              if (v.binding.ambiguity) {
+                caution = '【注意】主体-事件绑定状态为 ' + (v.binding.entityResolutionStatus || 'AMBIGUOUS') +
+                  '（存在歧义）。若无证据明确区分身份，supportLevel 不得为 supported。';
+              } else if (v.binding.hardValidation && !v.binding.hardValidation.passed) {
+                caution = '【注意】证据硬校验未全部通过。结论必须保守：无证据支持的部分不得断言为已核实（supportLevel 优先 insufficient）。';
+              }
+            }
+            return { v25: v, sources: null, extra: caution };
           }).catch(function () { return { v25: null, sources: null, extra: '' }; })
         : Promise.all([
         (WCC_DATASOURCE && WCC_DATASOURCE.isAvailable() && query.length >= 4)
@@ -272,7 +289,27 @@
           }
           throw err;
         }).then(function (parsed) {
-          var verifiedSources = !!sources || !!(v25 && v25.candidates && v25.candidates.length);
+          // search_advise §20/§22：Evidence-Grounded 硬校验——
+          // 检索没有可用来源（v25 候选为空 且 知乎来源为空）时，
+          // 禁止 LLM 凭训练知识输出"已核实"结论：supported/partial 一律降级 insufficient。
+          var hasRetrievedEvidence = !!(v25 && v25.candidates && v25.candidates.length) ||
+            !!(sources && ((sources.zhihu && sources.zhihu.length) || (sources.global && sources.global.length)));
+          if (mode === 'truth' && !hasRetrievedEvidence && parsed.supportLevel &&
+              parsed.supportLevel !== 'insufficient' && parsed.supportLevel !== 'unsupported' && parsed.supportLevel !== 'opinion') {
+            parsed.supportLevel = 'insufficient';
+            parsed.summary = String(parsed.summary || '') + '（检索未返回可核实的来源，已自动降级为证据不足）';
+            if (!Array.isArray(parsed.evidences)) parsed.evidences = [];
+          }
+          // §20.1：LLM 声称 supported/partial 但 evidences 未绑定任何检索编号 → 也降级
+          if (mode === 'truth' && hasRetrievedEvidence && (parsed.supportLevel === 'supported' || parsed.supportLevel === 'partial')) {
+            var evs = Array.isArray(parsed.evidences) ? parsed.evidences : [];
+            var bound = evs.some(function (ev) { return ev && typeof ev.evidenceId === 'string' && /^E\d+$/.test(ev.evidenceId); });
+            if (!bound) {
+              parsed.supportLevel = 'partial';
+              parsed.summary = String(parsed.summary || '') + '（结论未逐条绑定检索来源编号，已降级为部分支持）';
+            }
+          }
+          var verifiedSources = hasRetrievedEvidence;
           var entry = { result: parsed, at: Date.now(), sources: sources, verified: verifiedSources, verification: v25 };
           cacheSet(key, entry);
           return { mode: mode, result: parsed, cached: false, sources: sources, verified: verifiedSources, verification: v25 };

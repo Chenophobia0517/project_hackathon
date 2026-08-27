@@ -10,8 +10,7 @@
   // ---------- 问题类型 → 策略的静态映射（兜底 + LLM 结果校验用） ----------
   // questionType: fact(事实查询) / academic(学术) / policy(政策) / event(时事事件) /
   //               data(数据核实) / open(开放研究)
-  // V2.5 修复：fact 不再单路知乎——外部引擎可用时优先 metaso 广泛召回，
-  // 引擎缺席时 resolveEngines 自动回落 zhihu_global（TQ3），此处按理想拓扑书写
+  // V2.5 修复：fact 不再单路知乎——双核召回（Exa+Metaso）由 v25-pipeline 的 buildPlan 统一编排（search_advise §5.1）
   var TYPE_STRATEGY = {
     fact:     { engines: ['metaso', 'zhihu_global'], preferredSources: ['gov', 'media'], timeWindow: null,        budget: 2, dualEngine: false },
     academic: { engines: ['zhihu_global', 'exa'], preferredSources: ['acad', 'paper'], timeWindow: '5y',   budget: 2, dualEngine: true },
@@ -27,6 +26,74 @@
     gov_document: 'policy', org_info: 'fact', media_report: 'event',
     person_event: 'event', opinion: 'open', rhetoric: 'open', plain: 'fact'
   };
+
+  // ---------- 实体 → 官方域名表（search_advise §3.3 / §24：官方源 Query 不靠模型猜域名） ----------
+  // 命中即生成 { name, en, domains }；domains 用于 site: 约束与 Exa includeDomains。
+  var ENTITY_OFFICIAL_DOMAINS = {
+    'nasa': { en: 'NASA', domains: ['nasa.gov'] },
+    '美国宇航局': { en: 'NASA', domains: ['nasa.gov'] },
+    'who': { en: 'WHO', domains: ['who.int'] },
+    '世界卫生组织': { en: 'WHO', domains: ['who.int'] },
+    '世卫组织': { en: 'WHO', domains: ['who.int'] },
+    'un': { en: 'UN', domains: ['un.org'] },
+    '联合国': { en: 'United Nations', domains: ['un.org'] },
+    'esa': { en: 'ESA', domains: ['esa.int'] },
+    '欧洲航天局': { en: 'ESA', domains: ['esa.int'] },
+    'fda': { en: 'FDA', domains: ['fda.gov'] },
+    '美国食品药品监督管理局': { en: 'FDA', domains: ['fda.gov'] },
+    'cdc': { en: 'CDC', domains: ['cdc.gov'] },
+    'nih': { en: 'NIH', domains: ['nih.gov'] },
+    'eu': { en: 'EU', domains: ['europa.eu'] },
+    '欧盟': { en: 'European Union', domains: ['europa.eu'] },
+    '国家统计局': { en: 'National Bureau of Statistics', domains: ['stats.gov.cn'] },
+    '统计局': { en: 'statistics bureau', domains: ['stats.gov.cn'] },
+    '全国人大': { en: 'NPC', domains: ['npc.gov.cn'] },
+    '人大常委会': { en: 'NPC', domains: ['npc.gov.cn'] },
+    '中国政府': { en: 'Chinese government', domains: ['gov.cn'] },
+    '国务院': { en: 'State Council', domains: ['gov.cn'] },
+    '最高法': { en: 'Supreme People\'s Court', domains: ['court.gov.cn'] },
+    '最高人民法院': { en: 'Supreme People\'s Court', domains: ['court.gov.cn'] },
+    '最高检': { en: 'Supreme People\'s Procuratorate', domains: ['spp.gov.cn'] },
+    '最高人民检察院': { en: 'Supreme People\'s Procuratorate', domains: ['spp.gov.cn'] },
+    '央行': { en: 'PBOC', domains: ['pbc.gov.cn'] },
+    '中国人民银行': { en: 'PBOC', domains: ['pbc.gov.cn'] },
+    '教育部': { en: 'Ministry of Education', domains: ['moe.gov.cn'] },
+    '工信部': { en: 'MIIT', domains: ['miit.gov.cn'] },
+    '财政部': { en: 'Ministry of Finance', domains: ['mof.gov.cn'] },
+    '卫健委': { en: 'NHC', domains: ['nhc.gov.cn'] },
+    '国家卫健委': { en: 'NHC', domains: ['nhc.gov.cn'] },
+    '国家卫生健康委员会': { en: 'NHC', domains: ['nhc.gov.cn'] },
+    '科技部': { en: 'MOST', domains: ['most.gov.cn'] },
+    '中科院': { en: 'CAS', domains: ['cas.cn'] },
+    '中国科学院': { en: 'CAS', domains: ['cas.cn'] }
+  };
+
+  // 从 claim 文本中检出已知实体（search_advise §3.1 实体识别，规则版；大小写不敏感）
+  function detectEntities(claimText) {
+    var t = String(claimText || '').toLowerCase();
+    var found = [];
+    var seen = {};
+    Object.keys(ENTITY_OFFICIAL_DOMAINS).forEach(function (key) {
+      if (t.indexOf(key) >= 0 && !seen[key]) {
+        seen[key] = true;
+        found.push({ name: key, en: ENTITY_OFFICIAL_DOMAINS[key].en, domains: ENTITY_OFFICIAL_DOMAINS[key].domains });
+      }
+    });
+    return found.slice(0, 3);
+  }
+
+  // 粗判问题地域范围（search_advise §10 Geographic Scope）：global/national/province/city/county/unknown
+  function detectScopeLevel(claimText, entities) {
+    var t = String(claimText || '');
+    if (/(全国|中国|国家|中央)/.test(t)) return 'national';
+    if (/(全省|省级|自治区|直辖市)/.test(t)) return 'province';
+    if (/(全市|市级|省会|[\u4e00-\u9fa5]{2}市)/.test(t)) return 'city';
+    if (/(县|县域)/.test(t)) return 'county';
+    // 实体里有国际机构域名 → global
+    if (entities && entities.some(function (e) { return /\.(gov|int|org)$/.test((e.domains || [''])[0]) && !/\.cn$/.test((e.domains || [''])[0]); })) return 'global';
+    if (/(全球|世界|国际|国外|美国|欧洲)/.test(t)) return 'global';
+    return 'unknown';
+  }
 
   // claim.sourceRequirement → questionType 映射（V2.5 修复：sourceRequirement 是
   // claim-detector 的独立枚举 gov/acad/official/media/industry/corporate/community/any，
@@ -51,12 +118,18 @@
     '- questionType: "fact"(事实查询，官方来源优先) / "academic"(学术问题，论文与研究机构优先) /',
     '  "policy"(政策问题，政府与监管机构优先) / "event"(时事事件) / "data"(数据核实) / "open"(开放研究)',
     '- keywords: 2~3 组中文搜索关键词数组（去口语化、含实体与数字）',
+    '- keywordsEn: 当声明涉及国际实体/英文材料时给出 1~2 组英文搜索关键词，否则给空数组',
+    '  （如 NASA 类问题必须给英文关键词，如 "NASA mission cancellation reason"）',
+    '- entities: 声明中的核心主体数组（如 ["NASA"]，无则空数组）',
+    '- scopeLevel: 问题涉及的地域范围：global/national/province/city/county/unknown',
+    '  （如"全国人口"=national，"某县"=county，"NASA"=global）',
+    '- questionFocus: 问题真正要答案的点，一句短语（如"颁布时间"/"人口数量"/"取消原因"），用于判断来源是否直接回答问题',
     '- preferredSources: 来源类型偏好数组，取值 gov/acad/paper/media/org/biz/zhihu/other',
     '- timeWindow: 时间要求，"1y"/"3y"/"5y" 或 null(不限)',
     '- budget: 搜索预算 1~3（简单事实=1，需要多方印证=2，开放探索=3）',
     '- dualEngine: 是否需要双搜索引擎（广泛召回+语义召回），布尔值',
     '',
-    '只输出 JSON：{"questionType":"data","keywords":["...","..."],"preferredSources":["gov","paper"],"timeWindow":"5y","budget":2,"dualEngine":true}'
+    '只输出 JSON：{"questionType":"data","keywords":["...","..."],"keywordsEn":["..."],"entities":["..."],"scopeLevel":"national","questionFocus":"人口数量","preferredSources":["gov","paper"],"timeWindow":"5y","budget":2,"dualEngine":true}'
   ].join('\n');
 
   function extractJson(text) {
@@ -116,7 +189,9 @@
   }
 
   // ---------- LLM 输出校验 + 兜底字段填充 ----------
-  function sanitizeStrategy(raw, fallbackType) {
+  var SCOPE_LEVELS = ['global', 'national', 'province', 'city', 'county', 'unknown'];
+
+  function sanitizeStrategy(raw, fallbackType, claimText) {
     var s = TYPE_STRATEGY[fallbackType];
     var out = {
       questionType: validType(raw && raw.questionType) ? raw.questionType : fallbackType
@@ -125,6 +200,16 @@
     out.keywords = Array.isArray(raw && raw.keywords) && raw.keywords.length
       ? raw.keywords.map(String).slice(0, 4)
       : null; // null → 调用方用 claim.text 原文作为关键词
+    out.keywordsEn = Array.isArray(raw && raw.keywordsEn) && raw.keywordsEn.length
+      ? raw.keywordsEn.map(String).slice(0, 2)
+      : [];
+    // 实体：LLM 给出的主体名 → 关联官方域名（来自 ENTITY_OFFICIAL_DOMAINS，模型不猜域名）
+    var rawEntities = Array.isArray(raw && raw.entities) ? raw.entities.map(String).slice(0, 3) : [];
+    out.entities = resolveEntities(rawEntities, claimText);
+    out.scopeLevel = SCOPE_LEVELS.indexOf(raw && raw.scopeLevel) >= 0 ? raw.scopeLevel : detectScopeLevel(claimText, out.entities);
+    out.questionFocus = typeof (raw && raw.questionFocus) === 'string' && raw.questionFocus.trim()
+      ? raw.questionFocus.trim().slice(0, 20)
+      : null;
     out.preferredSources = Array.isArray(raw && raw.preferredSources) && raw.preferredSources.length
       ? raw.preferredSources.map(String).slice(0, 4)
       : base.preferredSources;
@@ -135,6 +220,26 @@
     return out;
   }
 
+  // LLM 实体名 + 规则表交叉：只保留表内已知实体的官方域名（§3.3 原则：不信任模型自造域名）
+  function resolveEntities(llmNames, claimText) {
+    var ruleEntities = detectEntities(claimText);
+    var out = [];
+    var seen = {};
+    function push(e) {
+      if (!e || seen[e.name]) return;
+      seen[e.name] = true;
+      out.push(e);
+    }
+    ruleEntities.forEach(push);                       // 规则表优先（带官方域名）
+    (llmNames || []).forEach(function (n) {
+      if (!n) return;
+      var hit = ENTITY_OFFICIAL_DOMAINS[n.toLowerCase()] || ENTITY_OFFICIAL_DOMAINS[n];
+      if (hit) push({ name: n, en: hit.en, domains: hit.domains });
+      else push({ name: n, en: '', domains: [] });    // 表外实体：保留名字用于 Entity Match，无域名
+    });
+    return out.slice(0, 3);
+  }
+
   function ruleFallback(claim) {
     // 兜底优先级：sourceRequirement（若提供且可映射）> objectType > fact
     var t = null;
@@ -142,9 +247,25 @@
       t = REQUIREMENT_TO_TYPE[claim.sourceRequirement];
     }
     if (!t) t = OBJECT_TO_TYPE[claim.objectType] || 'fact';
-    var strategy = sanitizeStrategy(null, t);
+    var strategy = sanitizeStrategy(null, t, claim && claim.text);
     strategy.viaFallback = true;
     return strategy;
+  }
+
+  // ---------- Query 展开（search_advise §3 / §5：中 / 英 / 官方 三路 Query） ----------
+  // 返回 { zh: [...], en: [...], official: [{query, domain}] }
+  function buildQueries(strategy, claimText) {
+    var zh = (strategy.keywords && strategy.keywords.length) ? strategy.keywords
+      : [String(claimText || '').replace(/[「」『』""''《》"'（）()【】\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)];
+    var en = (strategy.keywordsEn && strategy.keywordsEn.length) ? strategy.keywordsEn : [];
+    var official = [];
+    (strategy.entities || []).forEach(function (e) {
+      (e.domains || []).forEach(function (d) {
+        var base = en[0] || zh[0] || String(claimText || '').slice(0, 60);
+        official.push({ query: base + ' site:' + d, domain: d });
+      });
+    });
+    return { zh: zh, en: en, official: official };
   }
 
   // ---------- 对外入口 ----------
@@ -162,7 +283,7 @@
         fallbackT = REQUIREMENT_TO_TYPE[claim.sourceRequirement];
       }
       if (!fallbackT) fallbackT = OBJECT_TO_TYPE[claim.objectType] || 'fact';
-      var st = sanitizeStrategy(raw, fallbackT);
+      var st = sanitizeStrategy(raw, fallbackT, claim.text);
       st.viaFallback = false;
       return st;
     }).catch(function () {
@@ -173,9 +294,13 @@
   global.WCC_QUERY_ANALYZER = {
     analyzeQuery: analyzeQuery,
     ruleFallback: ruleFallback,
+    buildQueries: buildQueries,
     TYPE_STRATEGY: TYPE_STRATEGY,
     OBJECT_TO_TYPE: OBJECT_TO_TYPE,
-    REQUIREMENT_TO_TYPE: REQUIREMENT_TO_TYPE
+    REQUIREMENT_TO_TYPE: REQUIREMENT_TO_TYPE,
+    ENTITY_OFFICIAL_DOMAINS: ENTITY_OFFICIAL_DOMAINS,
+    detectEntities: detectEntities,
+    detectScopeLevel: detectScopeLevel
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
 

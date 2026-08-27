@@ -253,9 +253,21 @@
       // 由 query-analyzer 的 REQUIREMENT_TO_TYPE 映射（此前误当 objectType 导致 media→fact→单路知乎）
       var prep = (mode === 'truth' && global.WCC_V25)
         ? global.WCC_V25.verifyClaimV25(
-            { text: payload.selectedText, sourceRequirement: payload.__sourceRequirement || 'any', id: payload.__claimId }
+            { text: payload.selectedText, sourceRequirement: payload.__sourceRequirement || 'any', id: payload.__claimId },
+            // upgrade.md §5：Context Extraction 输入（页面上下文，供 Evidence Targeting 使用）
+            { context: { title: payload.title || '', url: payload.url || '', paragraph: payload.selectedText || '', surroundingText: '' } }
           ).then(function (v) {
-            return { v25: v, sources: null, extra: '' };
+            // upgrade.md §32/§31：主体歧义 / 硬校验未通过 → 提示合成层保守作答
+            var caution = '';
+            if (v && v.binding) {
+              if (v.binding.ambiguity) {
+                caution = '【注意】主体-事件绑定状态为 ' + (v.binding.entityResolutionStatus || 'AMBIGUOUS') +
+                  '（存在歧义）。若无证据明确区分身份，supportLevel 不得为 supported。';
+              } else if (v.binding.hardValidation && !v.binding.hardValidation.passed) {
+                caution = '【注意】证据硬校验未全部通过。结论必须保守：无证据支持的部分不得断言为已核实（supportLevel 优先 insufficient）。';
+              }
+            }
+            return { v25: v, sources: null, extra: caution };
           }).catch(function () { return { v25: null, sources: null, extra: '' }; })
         : Promise.all([
         (WCC_DATASOURCE && WCC_DATASOURCE.isAvailable() && query.length >= 4)

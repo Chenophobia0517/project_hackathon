@@ -198,10 +198,11 @@
     var c1 = cardWith('支持程度');
     c1.appendChild(el('span', 'badge ' + esc(result.supportLevel), SUPPORT_BADGES[result.supportLevel] || result.supportLevel));
     c1.appendChild(el('div', 'summary-text', esc(result.summary)));
-    // V2.5：策略与证据统计行（问题类型/引擎/独立证据数）
+    // V2.5：策略与证据统计行（问题类型/引擎/独立证据数）+ upgrade.md Binding 状态
     var st = entry && entry.verification && entry.verification.strategy;
     var stats = entry && entry.verification && entry.verification.stats;
-    if (st || stats) {
+    var bind = entry && entry.verification && entry.verification.binding;
+    if (st || stats || bind) {
       var metaParts = [];
       if (st) {
         var TYPE_NAMES = { fact: '事实查询', academic: '学术问题', policy: '政策问题', event: '时事事件', data: '数据核实', open: '开放研究' };
@@ -210,6 +211,14 @@
       }
       if (stats) {
         metaParts.push('候选 ' + stats.uniqueCount + ' · 独立证据 ' + stats.clusterCount + '（去重前 ' + stats.rawCount + '）');
+        if (typeof stats.independentCount === 'number') {
+          metaParts.push('独立来源 ' + stats.independentCount + (stats.sharedUpstreamCount ? ' · 共享上游 ' + stats.sharedUpstreamCount : ''));
+        }
+      }
+      if (bind) {
+        if (bind.bindingStatus) metaParts.push('绑定:' + bind.bindingStatus);
+        if (bind.entityResolutionStatus === 'AMBIGUOUS') metaParts.push('⚠ 主体歧义');
+        if (bind.hardValidation && !bind.hardValidation.passed) metaParts.push('硬校验未过');
       }
       var metaLine = el('div', 'v25-meta');
       metaLine.appendChild(el('span', 'v25-meta-text', esc(metaParts.join(' · '))));
@@ -231,6 +240,11 @@
         var badgeTxt = TYPE_BADGE[it.sourceAnalysis && it.sourceAnalysis.sourceType] || '网页';
         if (it.registryInfo && it.registryInfo.tier === 'verified') badgeTxt = '✓' + badgeTxt;
         line.appendChild(el('span', 'src-badge', esc(badgeTxt)));
+        // upgrade.md：论文身份 / 溯源独立性标记
+        if (it.paperStatus === 'TARGET_PAPER') line.appendChild(el('span', 'src-badge', '目标论文'));
+        else if (it.paperStatus === 'RELATED_PAPER') line.appendChild(el('span', 'src-badge', '相关论文'));
+        if (it.independence === 'SHARED_UPSTREAM') line.appendChild(el('span', 'src-synd', '共享上游'));
+        else if (it.independence === 'DERIVED') line.appendChild(el('span', 'src-synd', '衍生'));
         // 一手性标记
         if (it.sourceAnalysis && it.sourceAnalysis.originality === 'original') {
           line.appendChild(el('span', 'src-original', '一手'));

@@ -247,10 +247,12 @@
       var firstPartyBonus = (a.originality === 'original' && (st === 'gov' || st === 'paper' || st === 'acad')) ? 5 : 0;
       // §17/§18：转载惩罚（媒体数量 ≠ 独立证据数量）
       var syndPenalty = it.suspectedSyndication ? 6 : 0;
+      // upgrade.md §15/§16：确认是目标论文（TARGET_PAPER）→ 身份奖励
+      var targetPaperBonus = it.paperStatus === 'TARGET_PAPER' ? 6 : 0;
 
       var total = 0;
       for (var k in WEIGHTS) total += dims[k] * WEIGHTS[k];
-      total += (prefBonus + firstPartyBonus - syndPenalty);
+      total += (prefBonus + firstPartyBonus + targetPaperBonus - syndPenalty);
 
       it.scores = dims;
       it.prefBonus = prefBonus;
@@ -259,6 +261,8 @@
       // 一句话解释（面板展示用）
       var reasons = [];
       if (reg.tier === 'verified') reasons.push(reg.label || '权威机构');
+      if (it.paperStatus === 'TARGET_PAPER') reasons.push('目标论文');
+      else if (it.paperStatus === 'RELATED_PAPER') reasons.push('相关论文');
       if (dims.entity >= 90) reasons.push('主体匹配');
       if (dims.scope >= 100) reasons.push('地域范围匹配');
       if (dims.directness >= 75) reasons.push('直接回应问题');

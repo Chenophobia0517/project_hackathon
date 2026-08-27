@@ -18,24 +18,47 @@
   // ---------- 策略级会话缓存（TQ5）----------
   var strategyCache = {}; // claim.text -> strategy
 
-  // 根据策略+可用性产出实际引擎队列（TQ3 fallback）
-  function resolveEngines(strategy) {
-    var base = [];
-    if (strategy.questionType === 'academic') base = ['zhihu_global', 'exa', 'metaso'];
-    else if (strategy.questionType === 'policy' || strategy.questionType === 'data') base = ['metaso', 'zhihu_global'];
-    else if (strategy.questionType === 'event') base = ['metaso', 'zhihu_global'];
-    else if (strategy.questionType === 'open') base = ['metaso', 'exa'];
-    else base = ['zhihu_global'];
+  // search_advise §5.1：取消硬路由——所有问题类型都跑 Exa + Metaso 双核召回，
+  // Zhihu 只做低配额社区补充；questionType 只影响各引擎预算配额，不再排除任何引擎。
+  var ENGINE_BUDGET = {
+    fact:     { exa: 4, metaso: 4, zhihu: 1 },
+    academic: { exa: 5, metaso: 3, zhihu: 1 },
+    policy:   { exa: 3, metaso: 5, zhihu: 1 },
+    event:    { exa: 5, metaso: 4, zhihu: 1 },
+    data:     { exa: 4, metaso: 4, zhihu: 1 },
+    open:     { exa: 4, metaso: 4, zhihu: 2 }
+  };
 
-    var avail = base.filter(function (e) {
-      if (e === 'metaso') return DS.isMetasoAvailable();
-      if (e === 'exa') return DS.isExaAvailable();
-      return DS.isAvailable(); // zhihu 系
+  // 产出执行计划：{ steps: [{engine, query, count, opts}], degraded }
+  // 基础步：exa(英文或中文 Query)、metaso(中文 Query)、zhihu(中文 Query, 低配额)
+  // 官方步（§24）：exa 用 includeDomains 限定官方域；metaso 用 site: 约束（各限 2 个域名）
+  function buildPlan(strategy, claimText) {
+    var budget = ENGINE_BUDGET[strategy.questionType] || ENGINE_BUDGET.fact;
+    var queries = QA.buildQueries(strategy, claimText);
+    var zh = queries.zh[0] || String(claimText || '');
+    var en = queries.en[0] || zh;
+    var official = queries.official || [];
+
+    var steps = [];
+    var degraded = false;
+    if (DS.isExaAvailable()) {
+      steps.push({ engine: 'exa', query: en, count: budget.exa, opts: {} });
+    } else degraded = true;
+    if (DS.isMetasoAvailable()) {
+      steps.push({ engine: 'metaso', query: zh, count: budget.metaso, opts: {} });
+    } else degraded = true;
+    if (DS.isAvailable()) {
+      steps.push({ engine: 'zhihu', query: zh, count: budget.zhihu, opts: {} });
+    }
+
+    // 官方域名定向步：先于兜底深度，保证官方源有机会进入候选池（NASA→nasa.gov 等）
+    official.slice(0, 2).forEach(function (o) {
+      if (DS.isExaAvailable()) steps.push({ engine: 'exa', query: o.query, count: 3, opts: { includeDomains: [o.domain] } });
+      if (DS.isMetasoAvailable()) steps.push({ engine: 'metaso', query: o.query, count: 3, opts: { siteDomain: o.domain } });
     });
-    // 至少保留知乎通道（TQ3: 增强不是替代）
-    if (!avail.length && DS.isAvailable()) avail = ['zhihu_global'];
-    var degraded = !!(strategy.dualEngine && !(DS.isMetasoAvailable() && DS.isExaAvailable()));
-    return { engines: avail.slice(0, Math.max(1, strategy.budget)), degraded: degraded };
+
+    if (!steps.length) return { steps: [], degraded: true };
+    return { steps: steps, degraded: degraded };
   }
 
   // ---------- 主流程 ----------
@@ -53,29 +76,28 @@
         });
 
     return strategyP.then(function (strategy) {
-      // ② 引擎解析与检索（串行：先预算首路，不足再补——省配额）
-      var plan = resolveEngines(strategy);
+      // ② 引擎计划与检索（串行执行各步，官方定向步优先；总候选上限 14）
+      var plan = buildPlan(strategy, claim.text);
       strategy.degradedExternal = plan.degraded;
 
-      var queries = strategy.keywords && strategy.keywords.length ? strategy.keywords : [claim.text];
       var searchSeq = Promise.resolve({ merged: [], enginesUsed: [], queryLog: [] });
-      var usedIdx = 0;
+      var stepIdx = 0;
 
-      function runEngineStep(acc) {
-        if (usedIdx >= plan.engines.length || acc.merged.length >= 8) return acc;
-        var engine = plan.engines[usedIdx++];
-        var q = queries[Math.min(usedIdx - 1, queries.length - 1)] || queries[0];
-        return DS.engineSearch(engine, q, 6).then(function (items) {
-          acc.enginesUsed.push(engine + '(' + items.length + ')');
-          acc.queryLog.push({ engine: engine, query: q, hits: items.length });
+      function runStep(acc) {
+        if (stepIdx >= plan.steps.length || acc.merged.length >= 14) return acc;
+        var step = plan.steps[stepIdx++];
+        var q = String(step.query || '').slice(0, 100);
+        return DS.engineSearch(step.engine, q, step.count, step.opts).then(function (items) {
+          acc.enginesUsed.push(step.engine + '(' + items.length + ')');
+          acc.queryLog.push({ engine: step.engine, query: q, hits: items.length });
           acc.merged = acc.merged.concat(items);
           return acc;
         }, function () {
           return acc;
-        }).then(runEngineStep);
+        }).then(runStep);
       }
 
-      return searchSeq.then(runEngineStep).then(function (acc) {
+      return searchSeq.then(runStep).then(function (acc) {
         // ③ URL 规范化去重（§3）
         var dd = UU.dedupeByNormalizedUrl(acc.merged, function (it) { return it.url; });
         var candidates = dd.unique;
@@ -96,11 +118,12 @@
         return SA.analyzeSources(candidates).then(function (analyzed) {
           // ⑥ 证据聚簇（§9）
           EG.buildClusters(analyzed);
-          // ⑦ Scoring 排序（硬过滤→六维→转载降权）
-          var ranked = SE.rank(analyzed, strategy);
+          // ⑦ Scoring 排序（硬过滤→六维→转载降权；传入 claim 供 Entity/Directness/Temporal 维度使用）
+          var ranked = SE.rank(analyzed, strategy, claim.text);
 
-          // ⑧ Top-3 读原文逐源判定（V2.0 verify-engine 复用）
-          var topN = ranked.ranked.slice(0, 3);
+          // ⑧ 读原文逐源判定：交给 verify-engine 的 Top-6 多样性验证池（§19）
+          //    （传入 Top-8，验证池按来源类型多样性挑选，避免前三全是同类媒体）
+          var topN = ranked.ranked.slice(0, 8);
           return VE.verifyClaim(claim, topN).then(function (v) {
             v.queries = acc.queryLog;
             v.candidates = ranked.ranked;         // 全量排序候选供面板展示
@@ -125,7 +148,8 @@
 
   global.WCC_V25 = {
     verifyClaimV25: verifyClaimV25,
-    resolveEngines: resolveEngines,
+    buildPlan: buildPlan,
+    ENGINE_BUDGET: ENGINE_BUDGET,
     _strategyCache: strategyCache
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

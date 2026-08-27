@@ -20,19 +20,58 @@
 
   var SOURCE_TYPES = ['gov', 'acad', 'paper', 'media', 'org', 'biz', 'zhihu', 'other'];
   var ORIGINALITY_LEVELS = ['original', 'secondary', 'tertiary'];
+  var SCOPE_LEVELS = ['global', 'national', 'province', 'city', 'county', 'unknown'];
+
+  // search_advise §14.1 / §15 / §16：来源身份类型（发布主体身份），与 sourceType 分离。
+  // sourceType 用于评分兼容（八类旧枚举），identityType 记录真实主体身份。
+  var IDENTITY_TYPES = [
+    'government_official', 'international_org', 'company_official', 'academic_institution',
+    'professional_association', 'mainstream_media', 'specialized_media', 'community_platform',
+    'forum', 'blog', 'social_media', 'aggregator', 'syndication', 'unknown'
+  ];
+  // 身份 → 评分用八类映射（search_advise §16：判发布主体，不判文章内容）
+  var IDENTITY_TO_SOURCE_TYPE = {
+    government_official: 'gov',
+    international_org: 'org',
+    company_official: 'biz',
+    academic_institution: 'acad',
+    professional_association: 'org',
+    mainstream_media: 'media',
+    specialized_media: 'media',
+    community_platform: 'zhihu',
+    forum: 'zhihu',
+    blog: 'other',
+    social_media: 'other',
+    aggregator: 'other',
+    syndication: 'media',
+    unknown: 'other'
+  };
+  // 明显非政府主体后缀（微信公众号上的学会/协会/公司等）：命中即不得判 government_official（§15）
+  var NON_GOV_SUFFIX = /(学会|协会|研究会|基金会|商会|俱乐部|公司|集团|工作室|中心|研究院)$/;
 
   var SYSTEM_PROMPT = [
     '你是来源分析器。给你一个网页的 URL、标题和内容摘要。',
     '请理解该来源并输出结构化 JSON：',
-    '- sourceType: 来源类型，取值 gov(政府机构)/acad(科研机构)/paper(学术论文)/media(媒体，含权威与专业)/org(官方组织/NGO)/biz(企业官方或商业机构)/zhihu(知乎)/other',
+    '最重要原则：来源类型必须根据【发布主体是谁】判断（Who published it），而不是根据文章内容谈论了什么（What does it talk about）。',
+    '  —— 例如：微信公众号"河北省健康管理学会"发布的人口分析文章，发布主体是专业学会，不是政府。',
+    '  —— 例如：某县检察院官网的"民法典实施案例"页面，发布主体是司法机关，属于 gov。',
+    '- publisher: 发布主体名称（如"国家统计局"/"河北省健康管理学会"/"澎湃新闻"，未知给空串）',
+    '- identityType: 发布主体身份，取值 government_official(政府机关)/international_org(国际组织)/',
+    '  company_official(企业官方)/academic_institution(科研院校)/professional_association(专业学会协会)/',
+    '  mainstream_media(主流媒体)/specialized_media(行业媒体)/community_platform(社区平台如知乎)/',
+    '  forum(论坛)/blog(个人博客)/social_media(社交媒体如微博公众号)/aggregator(内容聚合)/syndication(转载号)/unknown',
+    '- sourceType: 来源类型（兼容旧枚举），取值 gov(政府机构)/acad(科研机构)/paper(学术论文)/media(媒体)/',
+    '  org(官方组织或学会协会)/biz(企业)/zhihu(知乎等社区)/other；必须与 identityType 一致',
     '- originality: 一手性，取值 original(原始发布：官方公告/论文原文/当事人陈述/一手数据) /',
     '  secondary(转载或报道他人内容) / tertiary(聚合汇编多处来源)',
     '- originalityConfidence: high / medium / low（低置信时下游只标"疑似"）',
     '- org: 所属机构名（中文，未知给空串）',
     '- domain: 专业领域短语（如 财经/公共卫生/AI 技术，未知给空串）',
+    '- scopeLevel: 该来源主体覆盖的地域范围：global/national/province/city/county/unknown',
+    '  （如 国家统计局=national，某县统计局=county，WHO=global，某省级媒体=province）',
     '- citationHint: 摘要中是否引用了其他来源（"cites"/"none"）',
     '',
-    '只输出 JSON：{"sourceType":"gov","originality":"original","originalityConfidence":"high","org":"国家统计局","domain":"经济统计","citationHint":"none"}'
+    '只输出 JSON：{"publisher":"河北省健康管理学会","identityType":"professional_association","sourceType":"org","originality":"secondary","originalityConfidence":"medium","org":"河北省健康管理学会","domain":"健康管理","scopeLevel":"province","citationHint":"none"}'
   ].join('\n');
 
   function extractJson(text) {
@@ -67,7 +106,7 @@
       ],
       temperature: 0.1,
       response_format: { type: 'json_object' },
-      max_tokens: 300
+      max_tokens: 400
     };
     var controller = new AbortController();
     var timer = setTimeout(function () { controller.abort(); }, TIMEOUT_MS);
@@ -91,18 +130,33 @@
     });
   }
 
+  // 微信/微博等自媒体平台守卫（§15）：主体带明显非政府后缀 → 强制降级为专业学会/企业
+  function weixinIdentityGuard(raw, isWeixin) {
+    if (!isWeixin && !/weixin|wechat/.test(String(raw && raw.org || '') + String(raw && raw.publisher || ''))) return raw;
+    var pub = String((raw && (raw.publisher || raw.org)) || '');
+    if (raw && raw.identityType === 'government_official' && NON_GOV_SUFFIX.test(pub)) {
+      raw.identityType = 'professional_association';
+      raw.sourceType = 'org';
+    }
+    return raw;
+  }
+
   // sanitize：非法值回落 other/secondary/low
-  function sanitize(raw) {
-    raw = raw || {};
-    var st = SOURCE_TYPES.indexOf(raw.sourceType) >= 0 ? raw.sourceType : 'other';
+  function sanitize(raw, isWeixin) {
+    raw = weixinIdentityGuard(raw || {}, isWeixin);
+    var idt = IDENTITY_TYPES.indexOf(raw.identityType) >= 0 ? raw.identityType : 'unknown';
+    var st = SOURCE_TYPES.indexOf(raw.sourceType) >= 0 ? raw.sourceType : IDENTITY_TO_SOURCE_TYPE[idt];
     var og = ORIGINALITY_LEVELS.indexOf(raw.originality) >= 0 ? raw.originality : 'secondary';
     var conf = ['high', 'medium', 'low'].indexOf(raw.originalityConfidence) >= 0 ? raw.originalityConfidence : 'low';
     return {
       sourceType: st,
+      identityType: idt,
+      publisher: typeof raw.publisher === 'string' ? raw.publisher.slice(0, 40) : '',
       originality: og,
       originalityConfidence: conf,
       org: typeof raw.org === 'string' ? raw.org.slice(0, 40) : '',
       domain: typeof raw.domain === 'string' ? raw.domain.slice(0, 30) : '',
+      scopeLevel: SCOPE_LEVELS.indexOf(raw.scopeLevel) >= 0 ? raw.scopeLevel : 'unknown',
       citationHint: raw.citationHint === 'cites' ? 'cites' : 'none'
     };
   }
@@ -111,15 +165,24 @@
   function heuristicFallback(item) {
     var url = String(item.normalizedUrl || item.url || '').toLowerCase();
     var st = 'other';
-    if (/\.gov\.cn$|(\.|^)gov($|\/)|\.edu\.cn$|^arxiv\.org|^pubmed\./.test(url)) st = url.indexOf('/abs/') >= 0 || /\.pdf/.test(url) ? 'paper' : 'gov';
+    var idt = 'unknown';
+    if (/mp\.weixin\.qq\.com/.test(url)) { st = 'other'; idt = 'social_media'; }
+    else if (/\.gov\.cn$|(\.|^)gov($|\/)|\.edu\.cn$|^arxiv\.org|^pubmed\./.test(url)) st = url.indexOf('/abs/') >= 0 || /\.pdf/.test(url) ? 'paper' : 'gov';
     else if (/thepaper\.cn|caixin\.com|xinhuanet\.com|people\.com\.cn|cctv\.com|jiemian\.com|yicai\.com/.test(url)) st = 'media';
     else if (/zhihu\.com/.test(url)) st = 'zhihu';
+    if (st === 'gov') idt = 'government_official';
+    else if (st === 'media') idt = 'mainstream_media';
+    else if (st === 'zhihu') idt = 'community_platform';
+    else if (st === 'paper' || st === 'acad') idt = 'academic_institution';
     return {
       sourceType: st,
+      identityType: idt,
+      publisher: '',
       originality: 'secondary',
       originalityConfidence: 'low',
       org: '',
       domain: '',
+      scopeLevel: 'unknown',
       citationHint: 'none'
     };
   }
@@ -128,16 +191,22 @@
 
   // analyzeSource(item) -> Promise<analysis>
   // item: 搜索结果条目（url/title/snippet/normalizedUrl）
-  // analysis: { sourceType, originality, originalityConfidence, org, domain, citationHint, viaFallback }
+  // analysis: { sourceType, identityType, publisher, originality, originalityConfidence, org, domain, scopeLevel, citationHint, viaFallback }
   function analyzeSource(item) {
     var key = cacheKey(item);
     if (cache[key]) return Promise.resolve(cache[key]);
+
+    var url = String(item.normalizedUrl || item.url || '').toLowerCase();
+    var isWeixin = /mp\.weixin\.qq\.com/.test(url) || /weixin|wechat/.test(url);
+    var platformHint = isWeixin
+      ? '\n\n注意：这是微信公众号页面（mp.weixin.qq.com），发布主体是公众号的运营机构，请务必按【公众号主体】判断身份，而不是按文章内容。'
+      : '';
 
     var userContent = [
       'URL: ' + (item.normalizedUrl || item.url || ''),
       '标题: ' + (item.title || ''),
       '摘要: ' + String(item.snippet || '').slice(0, 260)
-    ].join('\n');
+    ].join('\n') + platformHint;
 
     // 无凭证时同样走启发式兜底（v2.5 原则：来源分析在任何配置下都可用，只是质量不同）
     var p = (!CONFIG || !CONFIG.DEEPSEEK_API_KEY)
@@ -146,7 +215,9 @@
           a.viaFallback = true;
           return a;
         })
-      : callLLM(userContent).then(sanitize).then(function (a) { a.viaFallback = false; return a; })
+      : callLLM(userContent).then(function (raw) {
+          return sanitize(raw, isWeixin);
+        }).then(function (a) { a.viaFallback = false; return a; })
         .catch(function () {
           var a = heuristicFallback(item);
           a.viaFallback = true;

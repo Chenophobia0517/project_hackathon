@@ -16,6 +16,26 @@
       { pattern: '^un\\.org$', label: '联合国' },
       { pattern: '^who\\.int$', label: 'WHO' },
       { pattern: '(\\.|^)worldbank\\.org$', label: '世界银行' },
+      // search_advise §14 / §23：重点官方机构域名（显式列出，label 供面板展示）
+      { pattern: '^stats\\.gov\\.cn$', label: '国家统计局' },
+      { pattern: '^npc\\.gov\\.cn$', label: '全国人大' },
+      { pattern: '^court\\.gov\\.cn$', label: '最高人民法院' },
+      { pattern: '^spp\\.gov\\.cn$', label: '最高人民检察院' },
+      { pattern: '^pbc\\.gov\\.cn$', label: '中国人民银行' },
+      { pattern: '^moe\\.gov\\.cn$', label: '教育部' },
+      { pattern: '^miit\\.gov\\.cn$', label: '工信部' },
+      { pattern: '^mof\\.gov\\.cn$', label: '财政部' },
+      { pattern: '^nhc\\.gov\\.cn$', label: '国家卫健委' },
+      { pattern: '^most\\.gov\\.cn$', label: '科技部' },
+      // 国际机构（§24：NASA / ESA / FDA / EU / CDC / NIH 等）
+      { pattern: '^nasa\\.gov$', label: 'NASA' },
+      { pattern: '^esa\\.int$', label: 'ESA 欧洲航天局' },
+      { pattern: '^fda\\.gov$', label: '美国 FDA' },
+      { pattern: '(\\.|^)europa\\.eu$', label: '欧盟' },
+      { pattern: '^cdc\\.gov$', label: '美国 CDC' },
+      { pattern: '^nih\\.gov$', label: '美国 NIH' },
+      { pattern: '^state\\.gov$', label: '美国国务院' },
+      { pattern: '^whitehouse\\.gov$', label: '美国白宫' },
       // 学术科研
       { pattern: '\\.edu\\.cn$', label: '中国高校' },
       { pattern: '\\.edu$', label: '国外高校' },
@@ -57,7 +77,10 @@
       { pattern: '^stdaily\\.com$', label: '科技日报' },
       { pattern: '^sciencenet\\.cn$', label: '科学网' },
       { pattern: '^zhuanlan\\.zhihu\\.com$', label: '知乎专栏' },
-      { pattern: '^zhihu\\.com$', label: '知乎' }
+      { pattern: '^zhihu\\.com$', label: '知乎' },
+      // search_advise §15：微信公众号/微博——主体需 LLM 逐次识别，不预设高权威
+      { pattern: '^mp\\.weixin\\.qq\\.com$', label: '微信公众号' },
+      { pattern: '(\\.|^)weibo\\.com$', label: '微博' }
     ]
   };
 

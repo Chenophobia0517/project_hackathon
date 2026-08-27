@@ -118,10 +118,13 @@
 
   // metaso：广泛召回。真实 API 为 https://metaso.cn/api/v1/search（M1 联调探明，
   // v2.5_UPGRADE 文档中的 playground 地址返回的是 HTML 页面，非 API）。
-  // endpoint 允许配置覆盖（TQ2）。
-  function searchMetaso(query, count) {
+  // endpoint 允许配置覆盖（TQ2）。opts.siteDomain → 追加 site: 约束（search_advise §4.1）。
+  function searchMetaso(query, count, opts) {
     if (!isMetasoAvailable()) return Promise.reject(new Error('metaso_not_configured'));
+    opts = opts || {};
     var endpoint = CONFIG.METASO_ENDPOINT || 'https://metaso.cn/search-api/playground';
+    var q = String(query || '').slice(0, 100);
+    if (opts.siteDomain && q.indexOf('site:') < 0) q += ' site:' + opts.siteDomain;
     var controller = new AbortController();
     var timer = setTimeout(function () { controller.abort(); }, TIMEOUT_MS);
     return fetch(endpoint, {
@@ -130,7 +133,7 @@
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + CONFIG.METASO_API_KEY
       },
-      body: JSON.stringify({ q: String(query || '').slice(0, 100), count: Math.min(count || 5, 10) }),
+      body: JSON.stringify({ q: q, count: Math.min(count || 5, 10) }),
       signal: controller.signal
     }).then(function (res) {
       clearTimeout(timer);
@@ -147,8 +150,17 @@
   }
 
   // Exa：语义召回（官方 https://api.exa.ai/search）
-  function searchExa(query, count) {
+  // opts.includeDomains → 限定官方域名（search_advise §4.1 / §24：NASA→nasa.gov 走 Exa 官方字段而非拼 site:）
+  function searchExa(query, count, opts) {
     if (!isExaAvailable()) return Promise.reject(new Error('exa_not_configured'));
+    opts = opts || {};
+    var body = {
+      query: String(query || '').slice(0, 200),
+      numResults: Math.min(count || 5, 10),
+      type: 'neural',
+      contents: { text: { maxCharacters: 300 } }
+    };
+    if (opts.includeDomains && opts.includeDomains.length) body.includeDomains = opts.includeDomains.slice(0, 3);
     var controller = new AbortController();
     var timer = setTimeout(function () { controller.abort(); }, TIMEOUT_MS);
     return fetch('https://api.exa.ai/search', {
@@ -157,12 +169,7 @@
         'Content-Type': 'application/json',
         'x-api-key': CONFIG.EXA_API_KEY
       },
-      body: JSON.stringify({
-        query: String(query || '').slice(0, 200),
-        numResults: Math.min(count || 5, 10),
-        type: 'neural',
-        contents: { text: { maxCharacters: 300 } }
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal
     }).then(function (res) {
       clearTimeout(timer);
@@ -177,14 +184,29 @@
     });
   }
 
-  // engineSearch(engine, query, count)：按名派发，供 search-controller 按策略调用。
-  // 引擎失败返回 []（不拖垮整体——调用方聚合时统一兜底）。
-  function engineSearch(engine, query, count) {
+  // buildEngineQuery(engine, query, constraints)：search_advise §4.1 ——
+  // 每个引擎自己决定如何处理 site:/domain/语言约束，返回该引擎可执行的查询参数。
+  // constraints: { domain?: string }
+  function buildEngineQuery(engine, query, constraints) {
+    constraints = constraints || {};
+    if (engine === 'exa') {
+      return { query: String(query || '').replace(/\s*site:[^\s]+/g, ''), includeDomains: constraints.domain ? [constraints.domain] : null };
+    }
+    if (engine === 'metaso') {
+      return { query: constraints.domain && String(query || '').indexOf('site:') < 0 ? String(query) + ' site:' + constraints.domain : String(query) };
+    }
+    // zhihu / zhihu_global 不支持 site:，原样返回
+    return { query: String(query || '') };
+  }
+
+  // engineSearch(engine, query, count, opts)：按名派发，供 search-controller / v25-pipeline 按策略调用。
+  // 引擎失败返回 []（不拖垮整体——调用方聚合时统一兜底）。opts: { includeDomains?, siteDomain? }
+  function engineSearch(engine, query, count, opts) {
     try {
       if (engine === 'zhihu') return searchZhihu(query, count).catch(function () { return []; });
       if (engine === 'zhihu_global' || engine === 'zhihu-global') return searchGlobal(query, count).catch(function () { return []; });
-      if (engine === 'metaso') return searchMetaso(query, count).catch(function () { return []; });
-      if (engine === 'exa') return searchExa(query, count).catch(function () { return []; });
+      if (engine === 'metaso') return searchMetaso(query, count, opts).catch(function () { return []; });
+      if (engine === 'exa') return searchExa(query, count, opts).catch(function () { return []; });
       return Promise.resolve([]);
     } catch (e) {
       return Promise.resolve([]);
@@ -201,6 +223,8 @@
     isMetasoAvailable: isMetasoAvailable,
     isExaAvailable: isExaAvailable,
     searchMetaso: searchMetaso,
-    searchExa: searchExa
+    searchExa: searchExa,
+    // search_advise 新增
+    buildEngineQuery: buildEngineQuery
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

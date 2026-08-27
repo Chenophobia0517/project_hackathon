@@ -171,6 +171,32 @@
 
   // ---------- 主流程 ----------
 
+  // §19：Top-N 多样性验证池——不再机械取前三。
+  // 输入已按 scoreTotal 降序；按来源类型限额挑选，保证验证对象来源多样：
+  // 至少覆盖 最高权威 / 最直接相关 / 不同来源类型 / 疑似转载线索。
+  function selectDiverseTopN(items, n) {
+    if (items.length <= n) return items;
+    var capPerType = Math.max(1, Math.ceil(n / 2)); // 同类型最多占一半
+    var picked = [];
+    var typeCount = {};
+    items.forEach(function (it) {
+      if (picked.length >= n) return;
+      var st = (it.sourceAnalysis && it.sourceAnalysis.sourceType) || 'other';
+      if ((typeCount[st] || 0) >= capPerType) return;
+      typeCount[st] = (typeCount[st] || 0) + 1;
+      picked.push(it);
+    });
+    // 类型太少不足 n 时，放宽配额补齐（保持分数顺序）
+    if (picked.length < n) {
+      items.forEach(function (it) {
+        if (picked.length >= n) return;
+        if (picked.indexOf(it) >= 0) return;
+        picked.push(it);
+      });
+    }
+    return picked;
+  }
+
   // verifyClaim({text, sourceRequirement}, candidates) ->
   //   Promise<{verdict, detail, evidences:[{url,title,sourceType,judgment}], readErrors:[...]}>
   function verifyClaim(claim, candidates) {
@@ -179,9 +205,9 @@
       return Promise.resolve({ verdict: 'no_source', detail: '搜索无结果', evidences: [], readErrors: [] });
     }
 
-    // Top-N 截断（T-4：控制读原文成本）
-    var TOP_N = Math.min(candidates.length, 3);
-    var top = candidates.slice(0, TOP_N);
+    // §19：Top-6 多样性验证池（T-4：控制读原文成本的同时保证来源多样性）
+    var TOP_N = Math.min(candidates.length, 6);
+    var top = selectDiverseTopN(candidates, TOP_N);
 
     // 读原文（N2）
     return global.WCC_WEB_READER.readAll(top).then(function (withContent) {
@@ -257,8 +283,8 @@
     if (!candidates || !candidates.length) {
       return Promise.resolve({ found: false, viewpoints: [], detail: '没有候选来源' });
     }
-    var TOP_N = Math.min(candidates.length, 4); // 求异需要更广覆盖
-    var top = candidates.slice(0, TOP_N);
+    var TOP_N = Math.min(candidates.length, 5); // §19：求异需要更广覆盖 + 来源多样性
+    var top = selectDiverseTopN(candidates, TOP_N);
     return global.WCC_WEB_READER.readAll(top).then(function (withContent) {
       var chain = Promise.resolve([]);
       withContent.forEach(function (cand) {
@@ -292,6 +318,7 @@
     judgeOne: judgeOne,
     aggregate: aggregate,
     discoverDifferViewpoints: discoverDifferViewpoints,
+    selectDiverseTopN: selectDiverseTopN,
     VERDICTS: VERDICTS,
     VERDICT_NAMES: VERDICT_NAMES
   };

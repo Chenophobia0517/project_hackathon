@@ -201,6 +201,91 @@ PRD 要求 Key 不进前端、必须有 Backend。两个选项：
 
 ---
 
+# V2.5 升级计划（待审批）
+
+> 依据 `v2.5_UPGRADE.md`。核心目标：**从"找到可靠来源"升级为"系统地发现、识别、比较可靠来源"。**
+> 最终能力：不仅告诉用户"找到了什么"，还告诉用户"为什么这个来源值得相信，以及它是不是原始证据"。
+> 版本演进：V2.0（Claim→搜索→阅读→验证）→ **V2.5（搜索→信源识别→来源评价→独立证据）** → V3.0 预留。
+> 原则：保留 Extension/全文分析/Claim/三问/Web Reader，不推翻已有流程。
+
+## V-0 · 架构解读
+
+### 现状 vs 目标
+| 维度 | V2.0 现状 | V2.5 目标 |
+|---|---|---|
+| 搜索入口 | search-controller 直接生成关键词 | **Query Analyzer** 判问题类型→定策略（关键词/来源类型/时间/**预算**/单双引擎） |
+| 引擎 | 知乎双通道（站内+全网） | 知乎 + **metaso（广泛召回）+ Exa（语义召回）**，按预算选择性调用 |
+| 结果处理 | origin 标注直接进列表 | **URL 规范化+去重管道**（tracking 参数/fragment/http/www/canonical/重定向） |
+| 来源评价 | 四级白名单 + 单一 authority 分 | **Trusted Source Registry**（Verified/Candidate/Restricted，先验非准入）+ 六维分离评分 |
+| 评分指标 | authority 加权混排 | **Authority / Expertise / Relevance / Originality / Evidence / Freshness 六维分离**（权威≠一手） |
+| 职责边界 | 白名单+线性公式 | **LLM 只负责理解来源；Scoring Engine 负责稳定排序** |
+| 证据独立性 | 每条 URL 都算独立证据 | 识别转载关系（A cites B），避免重复转载冒充独立证据 |
+
+### 复用 vs 新增
+- **完全复用**：extractor/orb/hover/content 三 Tab UI、claim-detector v2、web-reader、verify-engine 五态判定、缓存框架、消息总线
+- **改造**：search-controller（并入 Query Analyzer + Registry + Scoring Engine）、datasource（抽象多引擎 provider）、verify-engine（增加独立证据标记）、panel 来源卡展示六维徽章
+- **新增模块**：`query-analyzer.js`（问题类型→策略）、`url-utils.js`（规范化+去重）、`source-registry.js`（可信来源注册表）、`source-analyzer.js`（LLM 来源理解）、`evidence-graph.js`（引用关系）
+
+## V-1 · 里程碑拆分
+
+| # | 内容 | 要点 |
+|---|---|---|
+| M0 | `query-analyzer.js` | LLM 判问题类型（fact/academic/policy/open…）→ 输出策略 JSON：关键词组/优先来源类型/时间窗/预算(1~3 路查询)/是否双引擎。低成本 prompt，带确定性兜底规则 |
+| M1 | `url-utils.js` + datasource 多引擎化 | URL Normalize/Dedup（tracking 清洗、fragment 剥离、协议与 www 归一）；datasource 抽象 provider 接口：zhihu/metaso/exa 各自 isAvailable/search，metaso 与 Exa 凭 `*_api.key` 可选接入，缺哪个降哪个 |
+| M2 | Trusted Source Registry | 从现有四级白名单迁移升级：verified/candidate/restricted 三层 seed 表；未知来源不删除→入候选池获临时评价；Registry 是先验（影响评分分母）不是硬准入 |
+| M3 | source-analyzer.js | LLM 来源理解：输入 URL/标题/摘要→结构化输出来源类型(10 类)/一手二手三级/机构/领域/引用线索；结果按 (query,domain) 缓存 |
+| M4 | evidence-graph.js | 基础转载识别：同文相似度对比+逐字引用段匹配→标记"疑似同一原始来源"；verify-engine 汇总时按证据簇计数而非 URL 数 |
+| M5 | Scoring Engine + verify-engine 改造 | 六维评分（authority/expertise/relevance/originality/evidence/freshness 各 0~100）加权合成排序分；硬过滤先行（不可访问/垃圾/完全不相关）；求真结果附"为什么信这个来源"的一句解释 |
+| M6 | panel 展示升级 | 来源卡显示：五态结论 → 证据 → 来源列表（类型徽章+六维关键项+原始可点击 URL）；区分「无来源」vs「无需验证」（V2.0 已有，回归确认） |
+| M7 | 回归 + 验收 + tag v2.5 | §13 全清单对照；V2.0 全功能回归 |
+
+## V-2 · 技术决策点（需要你确认）
+
+### TQ1. Query Analyzer 的实现方式
+建议：**一次轻量 LLM 调用输出完整策略 JSON**（问题类型+关键词+预算一次返回），带规则兜底（LLM 失败时按 claim.objectType 走静态映射）。备选：纯规则零成本，但灵活性差。
+
+### TQ2. metaso base url 不确定怎么处理
+建议：**实现为 provider 配置项**（gen-config 里 metaso_endpoint 可覆盖，默认用 v2.5 文档中的 playground URL），首次真实调用时验证联通性并允许在 generated-config.js 中修正，不阻塞其他里程碑。备选：现在就花时间调研确定 endpoint。
+
+### TQ3. 双引擎都不配 key 时的行为
+建议：**保留现有知乎双通道作为 fallback**——metaso/exa 是增强不是替代；问题类型=开放研究但双引擎缺席时明示「已降级：仅知乎通道」。备选：无新引擎就拒绝执行深度检索。
+
+### TQ4. Originality/Evidence 维度的判定信号源
+建议：**启发式优先**（发布日期早于转载、含原始数据表/PDF/官方公告特征、被其他候选引用），LLM 分析辅助判断；不追求精确，标注"疑似"即可。备选：全靠 LLM 判断。
+
+### TQ5. 缓存粒度与存储位置
+建议：沿用 chrome.storage.session 会话级缓存，key=(query 哈希)/(domain+path)/(query+domain) 分别缓存 Query/SourceAnalysis/Evidence 判断，跨 Claim 同域免分析。备选：storage.local 持久化（更省配额但要考虑失效策略）。
+
+## V-3 · 风险应对
+
+| 风险 | 应对 |
+|---|---|
+| metaso endpoint 未定导致联调空转 | TQ2 方案：配置项+验证脚本先行，M1 完成即测，失败不阻塞 M2-M5 |
+| 新增两引擎后请求量翻倍（知乎已有 30001 限流前科） | 动态预算（M0 输出）+ Query/Domain 双级缓存（TQ5）+ 引擎间串行+退避 |
+| LLM 调用量上升（每 Claim 多一次 analyzer/analyzer 分析） | 同域缓存命中率预期 >60%（新闻类声明高重复）；预算上限：每次求真 ≤4 次 LLM |
+| 六维评分权重拍脑袋 | 初版权重写死+注释依据；面板显示"关键三项"而非全部分数，避免伪精确感 |
+| 证据独立性误判（相似≠转载） | 只标"疑似同一来源"（isSameEvidence=false 默认）；宁可漏判不可错杀 |
+
+## V-4 · 工作量预期
+
+M0~M7 合计约 **4~6 天**（单引擎联调视 TQ2 进度浮动 ±1 天）：
+- 纯逻辑模块（url-utils/registry/scoring）：各 0.5 天
+- LLM 相关（query-analyzer/source-analyzer/evidence-graph）：各 0.5~1 天
+- 联调与回归：1~1.5 天
+
+## V-5 · 待批清单
+
+**请审批：**
+- [ ] V-0 架构解读（复用现有链路，新增 query-analyzer/url-utils/source-registry/source-analyzer/evidence-graph）
+- [ ] V-1 里程碑拆分与顺序
+- [ ] V-2 五个决策点（TQ1-TQ5）
+- [ ] V-3 风险应对
+- [ ] V-4 工作量预期
+
+批准后我从 M0 开始执行。
+
+---
+
 ## 五、风险与应对
 
 | 风险 | 应对 |

@@ -276,13 +276,13 @@ M0~M7 合计约 **4~6 天**（单引擎联调视 TQ2 进度浮动 ±1 天）：
 ## V-5 · 待批清单
 
 **请审批：**
-- [ ] V-0 架构解读（复用现有链路，新增 query-analyzer/url-utils/source-registry/source-analyzer/evidence-graph）
-- [ ] V-1 里程碑拆分与顺序
-- [ ] V-2 五个决策点（TQ1-TQ5）
-- [ ] V-3 风险应对
-- [ ] V-4 工作量预期
+- [√] V-0 架构解读（复用现有链路，新增 query-analyzer/url-utils/source-registry/source-analyzer/evidence-graph）
+- [√] V-1 里程碑拆分与顺序
+- [√] V-2 五个决策点（TQ1-TQ5 全部按建议）
+- [√] V-3 风险应对
+- [√] V-4 工作量预期
 
-批准后我从 M0 开始执行。
+V2.5 批准记录：已批准（2026-08-27），开始执行 M0。
 
 ---
 

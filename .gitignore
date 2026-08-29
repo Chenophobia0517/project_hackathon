@@ -15,3 +15,5 @@ Thumbs.db
 .env
 .env.*
 src/core/generated-config.js
+proxy_base.txt
+proxy_token.txt

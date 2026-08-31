@@ -302,6 +302,7 @@ main { padding: 10px 12px 18px; }
 .auth-submit:hover { background: var(--accent, #4f6ef7); filter: brightness(1.08); }
 .auth-submit:disabled { opacity: .5; cursor: wait; }
 .auth-error { font-size: 11px; color: #c0392b; }
+.auth-hint { font-size: 11px; color: #1a7f37; line-height: 1.4; }
 
 /* ---- V2.5 溯源展示 ---- */
 .v25-meta-text {

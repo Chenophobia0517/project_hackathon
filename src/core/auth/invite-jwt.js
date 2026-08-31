@@ -118,11 +118,33 @@
     return save(null).then(function () { return { ok: true }; });
   }
 
+  // isApiAllowed() → Promise<boolean>：门禁守卫（V2.8 交互修复）
+  //   DIRECT 模式：有本地 DeepSeek key 即可（不受门禁影响）
+  //   PROXY 模式：有有效 JWT（未过期或可静默刷新）才允许调用 API
+  function isApiAllowed() {
+    if (!isProxy()) {
+      return Promise.resolve(!!(CONFIG && CONFIG.DEEPSEEK_API_KEY));
+    }
+    return getValidAccessToken().then(function () { return true; }, function () { return false; });
+  }
+
+  // proxyAuthHeader() → 'Bearer <JWT>' 或 ''（未登录）
+  // 供各 LLM/检索模块的 llmRequestParts/datasource 使用：PROXY 模式认证只用 JWT，
+  // 不再回落静态 PROXY_ACCESS_TOKEN（V2.8 交互修复：未登录必须被拒绝，而不是静默用静态令牌）。
+  // 各模块在通过 guardApi 后才调用本函数，此时 _cachedAccessToken 已被 getValidAccessToken 刷新。
+  function proxyAuthHeader() {
+    if (!isProxy()) return '';
+    var t = _cachedToken || '';
+    return t ? 'Bearer ' + t : '';
+  }
+
   global.WCC_AUTH = {
     isProxy: isProxy,
     redeem: redeem,
     getAuthState: getAuthState,
     getValidAccessToken: getValidAccessToken,
+    isApiAllowed: isApiAllowed,
+    proxyAuthHeader: proxyAuthHeader,
     logout: logout,
     // 同步给各 LLM 模块的 llmRequestParts 使用（登录后失效；静态 PROXY_ACCESS_TOKEN 兜底）
     get _cachedAccessToken() {

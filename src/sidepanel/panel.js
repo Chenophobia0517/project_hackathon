@@ -118,6 +118,7 @@
   function showError(reason) {
     var map = {
       config_missing: ['未配置 API Key', '请在项目根放置 deepseek_api.key 并运行 node scripts/gen-config.js，然后重新加载扩展'],
+      needs_login: ['需要登录', '请点击右上角「登录」输入邀请码后使用'],
       http_401: ['鉴权失败', 'API Key 无效或已过期'],
       http_402: ['额度不足', 'DeepSeek 账户余额不足'],
       http_429: ['请求过于频繁', '请稍后再试'],
@@ -128,6 +129,8 @@
     els.errorDetail.textContent = m[1];
     hide(els.result); hide(els.loading);
     show(els.error);
+    // V2.8：未登录时自动展开登录弹层，引导输入邀请码
+    if (reason === 'needs_login') openAuthPanel();
   }
 
   // ---------- 分析流程 ----------
@@ -618,6 +621,7 @@
   var authSubmit = document.getElementById('auth-submit');
   var authCancel = document.getElementById('auth-cancel');
   var authError = document.getElementById('auth-error');
+  var authHint = document.getElementById('auth-hint');
 
   function renderAuth(state) {
     if (!authArea) return;
@@ -633,18 +637,28 @@
   function refreshAuthState() {
     chrome.runtime.sendMessage({ type: WCC_MSG.AUTH_STATE }, function (resp) {
       void chrome.runtime.lastError;
-      if (resp && resp.ok) renderAuth(resp.state);
-      else renderAuth(null);
+      if (resp && resp.ok) {
+        renderAuth(resp.state);
+        // V2.8：PROXY 未登录且无 Claim 工作台（悬浮球引导路径）→ 自动展开登录弹层
+        if (resp.state && resp.state.mode === 'proxy' && !resp.state.loggedIn && !state.claimPayload) {
+          openAuthPanel();
+        }
+      } else renderAuth(null);
     });
   }
 
+  // V2.8：展开登录弹层（悬浮球/API 被门禁拦截时引导登录）
+  function openAuthPanel() {
+    if (!authPanel) return;
+    if (authHint) authHint.hidden = true;
+    authPanel.hidden = false;
+    authError.hidden = true;
+    authInput.value = '';
+    authInput.focus();
+  }
+
   if (authArea) {
-    authLoginBtn.addEventListener('click', function () {
-      authPanel.hidden = false;
-      authError.hidden = true;
-      authInput.value = '';
-      authInput.focus();
-    });
+    authLoginBtn.addEventListener('click', openAuthPanel);
     authCancel.addEventListener('click', function () { authPanel.hidden = true; });
     authLogoutBtn.addEventListener('click', function () {
       chrome.runtime.sendMessage({ type: WCC_MSG.AUTH_LOGOUT }, function () {
@@ -663,6 +677,14 @@
         if (resp && resp.ok) {
           authPanel.hidden = true;
           refreshAuthState();
+          // V2.8：登录成功后自动重触发当前分析（面板刚被拦截的路径）
+          if (state.claimPayload && !state.analyzing) {
+            renderView(); // 无缓存 → startAnalysis 自动触发
+          } else if (authHint) {
+            // 悬浮球路径（无 Claim）：提示用户再点悬浮球即可开始扫描
+            authHint.textContent = '已开通 ✓ 现在回到网页点击右上角「求」悬浮球即可开始全文扫描';
+            authHint.hidden = false;
+          }
         } else {
           var reason = (resp && resp.reason) || 'login_failed';
           var msgMap = {

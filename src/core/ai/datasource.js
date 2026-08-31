@@ -37,7 +37,7 @@ function apiGet(path, params) {
     ? CONFIG.PROXY_BASE_URL + '/api/v1/content' + path + (qs ? '?' + qs : '')
     : CONFIG.ZHIHU_API_BASE + path + (qs ? '?' + qs : '');
   var headers = useProxy
-    ? { 'Authorization': 'Bearer ' + CONFIG.PROXY_ACCESS_TOKEN, 'Content-Type': 'application/json' }
+    ? { 'Authorization': WCC_AUTH && WCC_AUTH.proxyAuthHeader ? WCC_AUTH.proxyAuthHeader() : '', 'Content-Type': 'application/json' }
     : { 'Authorization': 'Bearer ' + CONFIG.ZHIHU_ACCESS_SECRET, 'X-Request-Timestamp': String(Math.floor(Date.now() / 1000)), 'Content-Type': 'application/json' };
 
   return fetch(url, {
@@ -142,7 +142,7 @@ function searchMetaso(query, count, opts) {
     ? CONFIG.PROXY_BASE_URL + '/metaso/search'
     : (CONFIG.METASO_ENDPOINT || 'https://metaso.cn/search-api/playground');
   var headers = useProxy
-    ? { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + CONFIG.PROXY_ACCESS_TOKEN }
+    ? { 'Content-Type': 'application/json', 'Authorization': WCC_AUTH && WCC_AUTH.proxyAuthHeader ? WCC_AUTH.proxyAuthHeader() : '' }
     : { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + CONFIG.METASO_API_KEY };
 
   return fetch(url, {
@@ -185,7 +185,7 @@ function searchExa(query, count, opts) {
     ? CONFIG.PROXY_BASE_URL + '/exa/search'
     : 'https://api.exa.ai/search';
   var headers = useProxy
-    ? { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + CONFIG.PROXY_ACCESS_TOKEN }
+    ? { 'Content-Type': 'application/json', 'Authorization': WCC_AUTH && WCC_AUTH.proxyAuthHeader ? WCC_AUTH.proxyAuthHeader() : '' }
     : { 'Content-Type': 'application/json', 'x-api-key': CONFIG.EXA_API_KEY };
 
   return fetch(url, {

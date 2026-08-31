@@ -15,7 +15,7 @@ function isLlmAvailable() { return isProxy() || !!(CONFIG && CONFIG.DEEPSEEK_API
 // DeepSeek 请求的 URL 与认证头：代理模式走 Worker（Worker 注入真实密钥），直连模式走官方
 function llmRequestParts() {
   if (isProxy()) {
-    return { url: CONFIG.PROXY_BASE_URL + '/v1/chat/completions', auth: 'Bearer ' + CONFIG.PROXY_ACCESS_TOKEN };
+    return { url: CONFIG.PROXY_BASE_URL + '/v1/chat/completions', auth: WCC_AUTH && WCC_AUTH.proxyAuthHeader ? WCC_AUTH.proxyAuthHeader() : '' };
   }
   return { url: CONFIG.DEEPSEEK_BASE_URL + '/chat/completions', auth: 'Bearer ' + CONFIG.DEEPSEEK_API_KEY };
 }

@@ -12,7 +12,7 @@ function isProxy() { return !!(CONFIG && CONFIG.PROXY_ENABLED === true && CONFIG
 function isLlmAvailable() { return isProxy() || !!(CONFIG && CONFIG.DEEPSEEK_API_KEY); }
 function llmRequestParts() {
   if (isProxy()) {
-    return { url: CONFIG.PROXY_BASE_URL + '/v1/chat/completions', auth: 'Bearer ' + CONFIG.PROXY_ACCESS_TOKEN };
+    return { url: CONFIG.PROXY_BASE_URL + '/v1/chat/completions', auth: WCC_AUTH && WCC_AUTH.proxyAuthHeader ? WCC_AUTH.proxyAuthHeader() : '' };
   }
   return { url: CONFIG.DEEPSEEK_BASE_URL + '/chat/completions', auth: 'Bearer ' + CONFIG.DEEPSEEK_API_KEY };
 }

@@ -2,8 +2,8 @@
 
 > 项目：知乎黑客松 2026「求真 · 深读」Chrome Extension（MV3）。
 > 本文件是全部版本的**计划与交付总账**：每个版本一节（计划 → 决策点 → 执行记录），按时间正序排列。
-> 版本升级要求的原文见仓库根 `v1.5_UPGRADE.md` ~ `v2.6_UPGRADE.md`。
-> 回退锚点：git tag 与里程碑一一对应（m0~m4 / u0~u4 / v1.5 / v1.6 / v2.0 / v2.5 / v2.6）。
+> 版本升级要求的原文见 `docs/` 下 `v1.5_UPGRADE.md` ~ `v2.7_UPGRADE.md`。
+> 回退锚点：git tag 与里程碑一一对应（m0~m4 / u0~u4 / v1.5 / v1.6 / v2.0 / v2.5 / v2.6 / v2.7）。
 
 ---
 
@@ -15,6 +15,8 @@
 - [V2.0 · 信息溯源系统（计划 + 交付记录）](#v20--信息溯源系统)
 - [V2.5 · 来源评价系统（计划 + 交付记录）](#v25--来源评价系统)
 - [V2.6 · 证据定向与溯源追踪（交付记录）](#v26--证据定向与溯源追踪)
+- [V2.7 · 安全代理（交付记录）](#v27--安全代理)
+- [V2.8 · 知乎 OAuth 登录（升级计划，待审批）](#v28--知乎-oauth-登录)
 - [已知环境问题](#已知环境问题)
 - [遗留事项](#遗留事项)
 
@@ -247,6 +249,149 @@
 
 ---
 
+# V2.7 · 安全代理
+
+> 依据 `docs/v2.7_UPGRADE.md`（人工改造，2026-08-29~30 两天，提交 `55613f0` + `b49a72b`）。
+> 核心目标：**密钥仅存于云端、扩展零密钥**的安全可移植形态——引入 Cloudflare Workers 透明代理，
+> 分发包不含任何第三方 API 密钥，扩展仅持一个可随时撤销/轮换的访问令牌。
+> 代理源码独立于扩展仓库：`D:\code\2026zhihu_hackathon\qiuzhen-proxy\`（worker.js + wrangler.toml，非 git 仓库）。
+
+## 计划要点（架构变化）
+
+```text
+改造前（V2.6）：扩展 SW ──直连──▶ DeepSeek/知乎/metaso/Exa
+               generated-config.js 硬编码全部密钥（解压即读走，无法撤销/限流）
+改造后（V2.7）：扩展 SW ──HTTPS──▶ CF Worker (api.anota.best) ──▶ 各第三方
+               仅持访问令牌          真实密钥存 Worker Secrets（永不下发前端）
+```
+
+| 维度 | V2.6（已有） | V2.7（新增） |
+|---|---|---|
+| 密钥位置 | generated-config.js 明文硬编码，随扩展包分发 | 仅存于 Cloudflare Worker Secrets |
+| 请求路径 | 扩展 → 直连第三方 | 扩展 → CF Worker（认证+注入密钥）→ 第三方 |
+| 响应结构 | 第三方原始响应 | **不变**（透明代理）——下游归一化/评分/验证零改动 |
+| 可用性判断 | 检查本地密钥 | `isProxy() \|\| 本地密钥存在` |
+| 分发可行性 | 不可分发 | 可安全分发（零密钥 + 令牌可撤销） |
+| 回退 | — | 删除 proxy_base.txt → 重跑 gen-config → DIRECT 模式 |
+
+## 决策记录
+
+| 决策点 | 结论 |
+|---|---|
+| 代理形态 | **透明代理**（响应结构与原样一致）——smoke 45 项断言直接当回归网 |
+| 认证机制 | 阶段 A 静态 `ACCESS_TOKEN`；阶段 3 换知乎 OAuth JWT（→ v2.8） |
+| 密钥存储 | Cloudflare Workers Secrets（wrangler secret put，共 5 个：DEEPSEEK/ZHIHU/METASO/EXA/ACCESS_TOKENS） |
+| 域名 | `anota.best`，子域 `api.anota.best`（TLS + OAuth redirect_uri 前提） |
+| 回退机制 | 保留 DIRECT 模式（本地密钥，开发后门） |
+
+## 交付内容（三阶段全部落地）
+
+### 阶段 A：CF Workers 透明代理（新增 2 文件，部署于 Cloudflare 非扩展包内）
+
+- `qiuzhen-proxy/worker.js`（88 行）：CORS/透明转发/令牌校验；路由表：
+  `POST /v1/chat/completions`（DeepSeek 透传）/ `GET /api/v1/content/{zhihu_search,global_search}`（知乎，Worker 重新生成 X-Request-Timestamp）/ `POST /metaso/search` / `POST /exa/search` / `GET /health`
+- `qiuzhen-proxy/wrangler.toml`：部署配置（routes = api.anota.best/*）
+
+### 阶段 B：配置生成器双模式（`55613f0`）
+
+- `scripts/gen-config.js` 重写：**PROXY**（存在 proxy_base.txt → 密钥全置 null，仅含 PROXY_ENABLED/BASE_URL/ACCESS_TOKEN）vs **DIRECT**（原逻辑）
+- 新增输入文件（gitignored）：`proxy_base.txt`（https://api.anota.best）、`proxy_token.txt`（openssl rand -hex 32）
+
+### 阶段 C：扩展端全模块代理适配（`b49a72b`）
+
+- 7 个直连模块统一"三件套"（isProxy / isLlmAvailable / llmRequestParts），每文件固定 3 处改动（辅助函数 + fetch 地址/认证头 + 可用性校验）：
+  `datasource.js`（知乎/metaso/Exa 三数据源分别处理）、`analyzer.js`、`claim-detector.js`、`query-analyzer.js`、`source-analyzer.js`、`verify-engine.js`、`evidence-target.js`
+- 零改动确认（架构判断不调 DeepSeek）：v25-pipeline / provenance / academic / search-controller / web-reader / background / url-utils / source-registry / evidence-graph / scoring-engine / manifest / sidepanel / content-script
+
+## 验证
+
+- 回归冒烟：`node scripts/smoke-search-advise.js` → **45/45 PASS**
+- 语法校验：7 个改动文件 node --check 全过
+- 零密钥确认：`grep -cE "sk-ca0c|mk-6DCB|e673c367|64e12d23" src/core/generated-config.js` → **0**
+- 当前环境：generated-config.js 为 PROXY 模式（https://api.anota.best，零密钥）
+- 浏览器端到端与 Worker 联调：待人工实测（见遗留）
+
+---
+
+# V2.8 · 知乎 OAuth 登录
+
+> 依据 `docs/v2.7_UPGRADE.md` §7 阶段 3（未实施）。核心目标：**用知乎 OAuth 登录替代静态 `ACCESS_TOKEN`，
+> 实现"只有知乎登录用户才能使用"**——分发后任何知乎用户凭账号即可自助接入，不再需要运营者手工发放令牌。
+> **（本计划待审批）**
+
+## O-0 · 架构解读
+
+### 现状 vs 目标
+
+| 维度 | V2.7（已有） | V2.8（新增） |
+|---|---|---|
+| 认证 | 静态 ACCESS_TOKEN（运营者手工发放，泄露难察觉） | 知乎 OAuth 登录 → Worker 签发 JWT（可过期/刷新/按用户撤销） |
+| 用户门槛 | 谁拿到令牌谁用 | 知乎账号登录即用（白名单可选：账号/次数限制） |
+| Worker 鉴权 | `isValidUserToken` 查逗号分隔表 | JWT 校验（签名 + exp + sub 用户维度） |
+| 扩展体验 | 无登录概念，配置文件中放 token | 面板登录按钮 + 登录态展示 + 过期自动引导重登 |
+
+### 复用 vs 新增
+
+- **完全复用**：透明代理路由、7 模块三件套、gen-config PROXY 模式、整个溯源管线
+- **改造**：worker.js（新增 /auth/zhihu + /auth/callback + JWT 签发/校验）、panel（登录 UI）、datasource 可用性判断（代理模式下知乎通道需登录态）
+- **新增**：`src/core/auth/zhihu-oauth.js`（扩展端 OAuth 流程封装）、Worker 端 JWT 工具（可放 qiuzhen-proxy 或独立 auth worker）
+
+## O-1 · 里程碑
+
+| # | 内容 | 要点 |
+|---|---|---|
+| O0 | 凭证与域名确认 | 知乎开放平台 OAuth 应用（client_id/secret/redirect_uri 白名单）；`anota.best` 回调域配置；确认知乎 OAuth 权限（黑客松项目资格） |
+| O1 | Worker OAuth 服务 | `/auth/zhihu`（302 → 知乎授权页）+ `/auth/callback`（收 code → 换 access_token → 签发 JWT）；Secrets 新增 `ZHIHU_CLIENT_ID/SECRET/JWT_SECRET` |
+| O2 | Worker JWT 鉴权 | `isValidUserToken` 支持 JWT（HS256 签名校验 + exp）；旧静态 ACCESS_TOKENS 保留为 fallback（开发期） |
+| O3 | 扩展登录流 | panel 登录按钮 → `chrome.identity.launchWebAuthFlow()` → 收 JWT → `storage.local` 持久化；未登录/过期态 → 引导登录（禁用仅代理功能或明示降级） |
+| O4 | 用户维度落地 | 请求带 JWT；Worker 按 sub 做限流/用量（可选）；知乎搜索 API 仍用应用级 Access Secret（OAuth 是身份门槛，不替代应用凭证——知乎开放平台搜索接口鉴权方式不变） |
+| O5 | 回归 + 验收 + tag v2.8 | smoke 45/45 + OAuth 流程人工实测 + 文档更新 |
+
+## O-2 · 技术决策点（需要你确认）
+
+### OQ1. OAuth 的目的定位
+建议：**身份门槛**——知乎 OAuth 只证明"你是知乎登录用户"，实际调用的知乎搜索 API 仍走应用级 Access Secret（在 Worker Secrets，与现状一致）。备选：用户级 token 直调知乎 API（知乎开放平台的搜索接口需应用级凭证，用户 token 用途受限，暂不建议）。
+### OQ2. JWT 有效期与刷新
+建议：**短效 JWT（24h）+ refresh token（30d）**，过期静默刷新，失败才引导重新登录。备选：长效 JWT（实现最简单，但泄露风险窗口大）。
+### OQ3. 登录 UI 形态
+建议：panel 顶部状态条（未登录 → 「知乎登录」按钮；已登录 → 知乎头像/昵称 + 退出）。备选：首次使用自动弹窗强制登录（体验重）。
+### OQ4. token 存储位置
+建议：`chrome.storage.local`（持久，重启免重登）。备选：storage.session（更安全但每次启动重登，体验差）。
+### OQ5. 用户白名单/限流
+建议：V2.8 先不做白名单，JWT 签发即用；Worker 按 sub 做基础请求计数（免费计划内存计数即可）。备选：KV 持久化限流（需另开 KV 绑定）。
+
+## O-3 · 风险与应对
+
+| 风险 | 应对 |
+|---|---|
+| 知乎 OAuth 权限未最终获批 | O0 前置验证；不通过则保持静态令牌模式（v2.7 已可用），计划降级为「JWT 化 + 邀请码」 |
+| `chrome.identity.launchWebAuthFlow` 与知乎 OAuth 兼容性（redirect_uri 匹配） | 知乎开放平台配置 `https://<extension-id>.chromiumapp.org/` 回调；O3 联调优先验证 |
+| JWT_SECRET 泄露 | Secrets 管理 + 定期轮换；签发时带 iss/aud 防跨域使用 |
+| token 过期导致用户困惑 | 静默刷新 + 明确「登录已过期，请重新登录」引导 |
+| 登录态丢失（storage.local 被清） | 401 时自动转引导登录，不影响 DIRECT 模式（开发） |
+
+## O-4 · 工作量与顺序
+
+O0 → O1 → O2 → O3 → O4 → O5，总计约 **2～3 天**（O0 依赖外部批复可并行等；O1+O2 半天~1 天，O3 半天~1 天，O4/O5 半天）。
+若时间紧：O4 可砍（仅保留 JWT 鉴权不做用户维度），O3 的 UI 可先只做登录按钮不做头像展示。
+
+## O-5 · 需要你提供的输入
+
+1. 知乎开放平台 OAuth 应用凭证（client_id / client_secret）与回调域配置（或确认已在平台侧完成）
+2. 知乎 OAuth 权限批复状态（黑客松项目资格）
+3. 五个决策点（OQ1-OQ5）的选择（或"按建议"）
+
+**请审批：**
+- [ ] O-0 架构解读（身份门槛定位、复用现有代理）
+- [ ] O-1 里程碑拆分与顺序
+- [ ] O-2 五个决策点（OQ1-OQ5）
+- [ ] O-3 风险应对
+- [ ] O-4 工作量预期
+
+批准后我从 O0 开始执行。
+
+---
+
 # 已知环境问题
 
 - **Chrome 151 + --load-extension 的 content script 注入失效**（自动化测试环境）：开发者模式扩展的 content script 不再注入（含最小 hello-world 复现；site access"所有网站"后仅首次导航偶发注入）。注入链模拟证明 5 个 content script 无运行时错误。**影响**：E2E 自动化暂不可用。**缓解**：人工加载扩展正常使用，或降级 Chrome for Testing 跑 E2E。
@@ -254,7 +399,7 @@
 
 # 遗留事项
 
-V2.6 已知遗留（详见 `v2.6_UPGRADE.md` §6）：
+V2.6 已知遗留（详见 `docs/v2.6_UPGRADE.md` §6）：
 
 1. Entity–Event Resolution 完整版（多候选事件逐一检索比对）未实现——当前为单次决策状态机
 2. Provenance 未纳入八维权重（仅独立性标记/统计呈现）
@@ -263,4 +408,11 @@ V2.6 已知遗留（详见 `v2.6_UPGRADE.md` §6）：
 5. LLM 版 Evidence Target 分析未在真实 API 下联调（冒烟只覆盖规则兜底路径）
 6. 页面被反爬拦截时超链接提取静默回退语义搜索——可加 content-script 侧兜底上报段落 `<a>` 链接
 
-历史遗留（各版本执行记录中的临时项已随交付关闭；V2.6 后无未关闭的代码级遗留）。
+V2.7 已知遗留（详见 `docs/v2.7_UPGRADE.md` §7）：
+
+1. **阶段 3 知乎 OAuth（→ v2.8 计划，见上节）**
+2. **阶段 4 分发打包 + 密钥轮换（未实施）**：确认 PROXY 零密钥后打包；分发前必须到各平台**撤销旧密钥、生成新密钥**并 `wrangler secret put` 更新（安全警示：改造过程中密钥曾以明文出现在对话/文件中）
+3. 辅助函数重复：7 文件各自定义 isProxy/isLlmAvailable/llmRequestParts，未来可抽共享 `llm-client.js`（需改 background importScripts）
+4. Worker 限流：免费计划无内置 Rate Limiting，当前靠静态令牌 + JWT 过期；规模化需 KV 计数器或 Durable Objects
+5. Worker 流式：passthrough 支持流式，但扩展端 analyzer 为非流式调用
+6. 隐私声明：分发后需诚实说明"查询语句经运营者代理服务器转发"（与诚实溯源原则一致）

@@ -16,7 +16,7 @@
 - [V2.5 · 来源评价系统（计划 + 交付记录）](#v25--来源评价系统)
 - [V2.6 · 证据定向与溯源追踪（交付记录）](#v26--证据定向与溯源追踪)
 - [V2.7 · 安全代理（交付记录）](#v27--安全代理)
-- [V2.8 · 知乎 OAuth 登录（升级计划，待审批）](#v28--知乎-oauth-登录)
+- [V2.8 · 登录门禁（升级计划，待审批）](#v28--登录门禁邀请码--jwt)
 - [已知环境问题](#已知环境问题)
 - [遗留事项](#遗留事项)
 
@@ -313,10 +313,14 @@
 
 ---
 
-# V2.8 · 知乎 OAuth 登录
+# V2.8 · 登录门禁（邀请码 + JWT）
 
-> 依据 `docs/v2.7_UPGRADE.md` §7 阶段 3（未实施）。核心目标：**用知乎 OAuth 登录替代静态 `ACCESS_TOKEN`，
-> 实现"只有知乎登录用户才能使用"**——分发后任何知乎用户凭账号即可自助接入，不再需要运营者手工发放令牌。
+> 依据 `docs/v2.7_UPGRADE.md` §7 阶段 3（未实施）与知乎官方文档结论（2026-08-31 复核）。
+> 核心目标：**用「邀请码 + 短期 JWT」替代静态 `ACCESS_TOKEN`**——分发后任何受邀用户凭邀请码自助接入，
+> 不再需要运营者手工发放令牌；JWT 可过期/刷新/按用户撤销。
+> **方向调整记录**：原方案为知乎 OAuth 登录；阅读知乎官方文档（`docs/zhihu_OAuth_OFFICAL.md`，gitignored 不入库）确认——
+> 知乎 OAuth 面向「三方登录 + 获取授权用户个人信息」，与"仅作为登录门槛"的需求不匹配（申请需人工邮件审批、
+> 授权范围是邮箱/手机/公开内容、access_token 仅 1h 有效且无 refresh_token），故改用邀请码 + JWT。
 > **（本计划待审批）**
 
 ## O-0 · 架构解读
@@ -325,64 +329,63 @@
 
 | 维度 | V2.7（已有） | V2.8（新增） |
 |---|---|---|
-| 认证 | 静态 ACCESS_TOKEN（运营者手工发放，泄露难察觉） | 知乎 OAuth 登录 → Worker 签发 JWT（可过期/刷新/按用户撤销） |
-| 用户门槛 | 谁拿到令牌谁用 | 知乎账号登录即用（白名单可选：账号/次数限制） |
-| Worker 鉴权 | `isValidUserToken` 查逗号分隔表 | JWT 校验（签名 + exp + sub 用户维度） |
-| 扩展体验 | 无登录概念，配置文件中放 token | 面板登录按钮 + 登录态展示 + 过期自动引导重登 |
+| 认证 | 静态 ACCESS_TOKEN（运营者手工发放，泄露难察觉） | 邀请码兑换 → Worker 签发短期 JWT（可过期/刷新/按用户撤销） |
+| 用户门槛 | 谁拿到令牌谁用 | 受邀用户凭邀请码自助接入（邀请码一次性、可批量生成/吊销） |
+| Worker 鉴权 | `isValidUserToken` 查逗号分隔表 | JWT 校验（签名 + exp + sub 用户维度）；静态表保留为 fallback（开发期） |
+| 扩展体验 | 无登录概念，配置文件中放 token | 面板登录输入框 + 登录态展示 + 过期自动引导重登 |
 
 ### 复用 vs 新增
 
 - **完全复用**：透明代理路由、7 模块三件套、gen-config PROXY 模式、整个溯源管线
-- **改造**：worker.js（新增 /auth/zhihu + /auth/callback + JWT 签发/校验）、panel（登录 UI）、datasource 可用性判断（代理模式下知乎通道需登录态）
-- **新增**：`src/core/auth/zhihu-oauth.js`（扩展端 OAuth 流程封装）、Worker 端 JWT 工具（可放 qiuzhen-proxy 或独立 auth worker）
+- **改造**：worker.js（新增 `/auth/redeem` 邀请码兑换 + JWT 签发/校验）、panel（登录 UI）、datasource 可用性判断（代理模式下需有效 JWT）
+- **新增**：`src/core/auth/invite-jwt.js`（扩展端兑换+存储封装）、Worker 端 JWT 工具（HS256，`JWT_SECRET` 走 Secrets）
 
 ## O-1 · 里程碑
 
 | # | 内容 | 要点 |
 |---|---|---|
-| O0 | 凭证与域名确认 | 知乎开放平台 OAuth 应用（client_id/secret/redirect_uri 白名单）；`anota.best` 回调域配置；确认知乎 OAuth 权限（黑客松项目资格） |
-| O1 | Worker OAuth 服务 | `/auth/zhihu`（302 → 知乎授权页）+ `/auth/callback`（收 code → 换 access_token → 签发 JWT）；Secrets 新增 `ZHIHU_CLIENT_ID/SECRET/JWT_SECRET` |
-| O2 | Worker JWT 鉴权 | `isValidUserToken` 支持 JWT（HS256 签名校验 + exp）；旧静态 ACCESS_TOKENS 保留为 fallback（开发期） |
-| O3 | 扩展登录流 | panel 登录按钮 → `chrome.identity.launchWebAuthFlow()` → 收 JWT → `storage.local` 持久化；未登录/过期态 → 引导登录（禁用仅代理功能或明示降级） |
-| O4 | 用户维度落地 | 请求带 JWT；Worker 按 sub 做限流/用量（可选）；知乎搜索 API 仍用应用级 Access Secret（OAuth 是身份门槛，不替代应用凭证——知乎开放平台搜索接口鉴权方式不变） |
-| O5 | 回归 + 验收 + tag v2.8 | smoke 45/45 + OAuth 流程人工实测 + 文档更新 |
+| O0 | 门禁方案确认 | 确定邀请码+JWT（本文档已按此方向）；生成/吊销邀请码的运营端方式（wrangler secret 或 KV 存 active codes） |
+| O1 | Worker 兑换+签发 | `POST /auth/redeem`（邀请码 → 校验 → 签发 JWT{sub:邀请码别名, exp}）；`JWT_SECRET` 入 Secrets；静态 ACCESS_TOKENS 保留为 fallback |
+| O2 | Worker JWT 鉴权 | `isValidUserToken` 优先 JWT（HS256 签名 + exp + iss/aud），其次静态表 |
+| O3 | 扩展登录流 | panel 登录区（输入邀请码 → POST /auth/redeem → JWT 存 `storage.local`）；未登录/过期态 → 引导登录（仅代理功能需登录，DIRECT 模式不受影响） |
+| O4 | 用户维度落地 | 请求带 JWT；Worker 按 sub 做基础限流/用量（可选）；知乎搜索 API 仍用应用级 Access Secret（身份门槛与数据凭证分离） |
+| O5 | 回归 + 验收 + tag v2.8 | smoke 45/45 + 邀请码流程人工实测 + 文档更新 |
 
 ## O-2 · 技术决策点（需要你确认）
 
-### OQ1. OAuth 的目的定位
-建议：**身份门槛**——知乎 OAuth 只证明"你是知乎登录用户"，实际调用的知乎搜索 API 仍走应用级 Access Secret（在 Worker Secrets，与现状一致）。备选：用户级 token 直调知乎 API（知乎开放平台的搜索接口需应用级凭证，用户 token 用途受限，暂不建议）。
+### OQ1. 门禁方案（已按方向调整）
+建议：**邀请码 + JWT**（本次已选定）。理由：知乎 OAuth 面向三方登录与用户个人信息获取，与"仅作登录门槛"不匹配（详见方向调整记录）。若未来需要"知乎账号直接登录"或"读取用户知乎数据"，再回到 OAuth 申请流程。
 ### OQ2. JWT 有效期与刷新
-建议：**短效 JWT（24h）+ refresh token（30d）**，过期静默刷新，失败才引导重新登录。备选：长效 JWT（实现最简单，但泄露风险窗口大）。
+建议：**短期 JWT（24h）+ refresh token（30d）**，过期静默刷新，失败才引导重新输入邀请码。备选：长效 JWT（实现最简单，但泄露风险窗口大）。
 ### OQ3. 登录 UI 形态
-建议：panel 顶部状态条（未登录 → 「知乎登录」按钮；已登录 → 知乎头像/昵称 + 退出）。备选：首次使用自动弹窗强制登录（体验重）。
+建议：panel 顶部状态条（未登录 → 「输入邀请码」入口；已登录 → 用户别名 + 退出）。备选：首次使用自动弹窗强制登录（体验重）。
 ### OQ4. token 存储位置
 建议：`chrome.storage.local`（持久，重启免重登）。备选：storage.session（更安全但每次启动重登，体验差）。
-### OQ5. 用户白名单/限流
-建议：V2.8 先不做白名单，JWT 签发即用；Worker 按 sub 做基础请求计数（免费计划内存计数即可）。备选：KV 持久化限流（需另开 KV 绑定）。
+### OQ5. 邀请码管理/限流
+建议：V2.8 用 `INVITE_CODES`（Secrets 逗号分隔或 KV）一次性兑换；Worker 按 sub 做基础请求计数（免费计划内存计数即可）。备选：KV 持久化限流（需另开 KV 绑定）。
 
 ## O-3 · 风险与应对
 
 | 风险 | 应对 |
 |---|---|
-| 知乎 OAuth 权限未最终获批 | O0 前置验证；不通过则保持静态令牌模式（v2.7 已可用），计划降级为「JWT 化 + 邀请码」 |
-| `chrome.identity.launchWebAuthFlow` 与知乎 OAuth 兼容性（redirect_uri 匹配） | 知乎开放平台配置 `https://<extension-id>.chromiumapp.org/` 回调；O3 联调优先验证 |
+| 邀请码泄露 | 一次性兑换（兑换后作废）+ 运营者可随时轮换 `INVITE_CODES`；JWT 24h 过期限制泄露影响面 |
+| 无 refresh_token 机制（知乎 OAuth 无此字段，自研 refresh 需自建） | refresh token 由 Worker 自签发（不依赖第三方）；refresh 仅能在兑换后获得 |
 | JWT_SECRET 泄露 | Secrets 管理 + 定期轮换；签发时带 iss/aud 防跨域使用 |
 | token 过期导致用户困惑 | 静默刷新 + 明确「登录已过期，请重新登录」引导 |
 | 登录态丢失（storage.local 被清） | 401 时自动转引导登录，不影响 DIRECT 模式（开发） |
 
 ## O-4 · 工作量与顺序
 
-O0 → O1 → O2 → O3 → O4 → O5，总计约 **2～3 天**（O0 依赖外部批复可并行等；O1+O2 半天~1 天，O3 半天~1 天，O4/O5 半天）。
-若时间紧：O4 可砍（仅保留 JWT 鉴权不做用户维度），O3 的 UI 可先只做登录按钮不做头像展示。
+O0 → O1 → O2 → O3 → O4 → O5，总计约 **1.5～2 天**（无需等待外部批复；O1+O2 半天，O3 半天，O4/O5 半天）。
+若时间紧：O4 可砍（仅保留 JWT 鉴权不做用户维度），O3 的 UI 可先只做输入框不做别名展示。
 
 ## O-5 · 需要你提供的输入
 
-1. 知乎开放平台 OAuth 应用凭证（client_id / client_secret）与回调域配置（或确认已在平台侧完成）
-2. 知乎 OAuth 权限批复状态（黑客松项目资格）
-3. 五个决策点（OQ1-OQ5）的选择（或"按建议"）
+1. 邀请码策略：初始邀请码数量（默认 1 个测试码，`openssl rand -hex 16`）
+2. 五个决策点（OQ1-OQ5）的选择（或"按建议"）
 
 **请审批：**
-- [ ] O-0 架构解读（身份门槛定位、复用现有代理）
+- [ ] O-0 架构解读（邀请码+JWT 门禁、复用现有代理）
 - [ ] O-1 里程碑拆分与顺序
 - [ ] O-2 五个决策点（OQ1-OQ5）
 - [ ] O-3 风险应对
@@ -410,7 +413,7 @@ V2.6 已知遗留（详见 `docs/v2.6_UPGRADE.md` §6）：
 
 V2.7 已知遗留（详见 `docs/v2.7_UPGRADE.md` §7）：
 
-1. **阶段 3 知乎 OAuth（→ v2.8 计划，见上节）**
+1. **阶段 3 登录门禁（→ v2.8 计划，见上节）**：原「知乎 OAuth」经官方文档复核调整为「邀请码 + JWT」（2026-08-31 方向调整）
 2. **阶段 4 分发打包 + 密钥轮换（未实施）**：确认 PROXY 零密钥后打包；分发前必须到各平台**撤销旧密钥、生成新密钥**并 `wrangler secret put` 更新（安全警示：改造过程中密钥曾以明文出现在对话/文件中）
 3. 辅助函数重复：7 文件各自定义 isProxy/isLlmAvailable/llmRequestParts，未来可抽共享 `llm-client.js`（需改 background importScripts）
 4. Worker 限流：免费计划无内置 Rate Limiting，当前靠静态令牌 + JWT 过期；规模化需 KV 计数器或 Durable Objects

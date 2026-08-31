@@ -10,9 +10,12 @@ var CONFIG = global.QIUZHEN_CONFIG || null;
 function isProxy() { return !!(CONFIG && CONFIG.PROXY_ENABLED === true && CONFIG.PROXY_BASE_URL); }
 function isLlmAvailable() { return isProxy() || !!(CONFIG && CONFIG.DEEPSEEK_API_KEY); }
 // DeepSeek 请求的 URL 与认证头：代理模式走 Worker（Worker 注入真实密钥），直连模式走官方
+// V2.8：代理模式认证升级——优先 WCC_AUTH 的短期 JWT（storage.local，过期静默刷新），
+// JWT 未登录时回落静态 PROXY_ACCESS_TOKEN（保持 v2.7 行为，避免未登录即全盲）
 function llmRequestParts() {
   if (isProxy()) {
-    return { url: CONFIG.PROXY_BASE_URL + '/v1/chat/completions', auth: 'Bearer ' + CONFIG.PROXY_ACCESS_TOKEN };
+    var jwt = global.WCC_AUTH && global.WCC_AUTH._cachedAccessToken;
+    return { url: CONFIG.PROXY_BASE_URL + '/v1/chat/completions', auth: 'Bearer ' + (jwt || CONFIG.PROXY_ACCESS_TOKEN) };
   }
   return { url: CONFIG.DEEPSEEK_BASE_URL + '/chat/completions', auth: 'Bearer ' + CONFIG.DEEPSEEK_API_KEY };
 }

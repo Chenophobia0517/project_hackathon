@@ -1,6 +1,6 @@
 // Background Service Worker：Active Selection 的唯一中转与持久点（MV3，无独立后端——D2=B）。
 // 职责（PRD 06-技术架构 §4）：接收 CAPTURE_SELECTION → 存 storage.session → 广播/打开 Side Panel。
-importScripts('../generated-config.js', '../utils/message-types.js', '../ai/datasource.js', '../ai/analyzer.js', '../ai/claim-detector.js', '../ai/search-controller.js', '../ai/web-reader.js', '../ai/verify-engine.js', '../ai/query-analyzer.js', '../ai/url-utils.js', '../ai/source-registry.js', '../ai/source-analyzer.js', '../ai/evidence-graph.js', '../ai/scoring-engine.js', '../ai/evidence-target.js', '../ai/academic.js', '../ai/provenance.js', '../ai/v25-pipeline.js');
+importScripts('../generated-config.js', '../utils/message-types.js', '../auth/invite-jwt.js', '../ai/datasource.js', '../ai/analyzer.js', '../ai/claim-detector.js', '../ai/search-controller.js', '../ai/web-reader.js', '../ai/verify-engine.js', '../ai/query-analyzer.js', '../ai/url-utils.js', '../ai/source-registry.js', '../ai/source-analyzer.js', '../ai/evidence-graph.js', '../ai/scoring-engine.js', '../ai/v25-pipeline.js', '../ai/evidence-target.js', '../ai/academic.js', '../ai/provenance.js');
 
 // ---------- Active Selection 状态 ----------
 
@@ -148,6 +148,32 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     case WCC_MSG.PING:
       sendResponse({ ok: true, pong: true, at: Date.now() });
       return false;
+
+    // ---------- V2.8 登录门禁（邀请码 + JWT） ----------
+    case WCC_MSG.AUTH_LOGIN:
+      (function () {
+        var code = String((message && message.inviteCode) || '').trim();
+        if (!code) { sendResponse({ ok: false, reason: 'invite_code_required' }); return; }
+        WCC_AUTH.redeem(code).then(
+          function (r) { sendResponse({ ok: true, alias: r.alias }); },
+          function (err) { sendResponse({ ok: false, reason: String(err && err.code || err.message || 'login_failed') }); }
+        );
+      })();
+      return true; // 异步响应
+
+    case WCC_MSG.AUTH_STATE:
+      WCC_AUTH.getAuthState().then(
+        function (s) { sendResponse({ ok: true, state: s }); },
+        function () { sendResponse({ ok: false, reason: 'state_failed' }); }
+      );
+      return true;
+
+    case WCC_MSG.AUTH_LOGOUT:
+      WCC_AUTH.logout().then(
+        function () { sendResponse({ ok: true }); },
+        function () { sendResponse({ ok: false, reason: 'logout_failed' }); }
+      );
+      return true;
 
     case WCC_MSG.VERIFY_CLAIM:
       // V2.5：溯源管线升级——Query Analyzer → 多引擎检索 → URL 去重 → Registry 先验

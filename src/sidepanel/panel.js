@@ -607,5 +607,80 @@
     document.body.prepend(wrap);
   })();
 
+  // ---------- V2.8 登录门禁（邀请码 + JWT；仅代理模式显示入口） ----------
+
+  var authArea = document.getElementById('auth-area');
+  var authLoginBtn = document.getElementById('auth-login-btn');
+  var authUser = document.getElementById('auth-user');
+  var authLogoutBtn = document.getElementById('auth-logout-btn');
+  var authPanel = document.getElementById('auth-panel');
+  var authInput = document.getElementById('auth-code-input');
+  var authSubmit = document.getElementById('auth-submit');
+  var authCancel = document.getElementById('auth-cancel');
+  var authError = document.getElementById('auth-error');
+
+  function renderAuth(state) {
+    if (!authArea) return;
+    // DIRECT 模式（本地密钥）无登录概念 → 整区隐藏
+    if (!state || state.mode !== 'proxy') { authArea.hidden = true; return; }
+    authArea.hidden = false;
+    authLoginBtn.hidden = !!state.loggedIn;
+    authUser.hidden = !state.loggedIn;
+    authLogoutBtn.hidden = !state.loggedIn;
+    if (state.loggedIn) authUser.textContent = state.alias || '已登录';
+  }
+
+  function refreshAuthState() {
+    chrome.runtime.sendMessage({ type: WCC_MSG.AUTH_STATE }, function (resp) {
+      void chrome.runtime.lastError;
+      if (resp && resp.ok) renderAuth(resp.state);
+      else renderAuth(null);
+    });
+  }
+
+  if (authArea) {
+    authLoginBtn.addEventListener('click', function () {
+      authPanel.hidden = false;
+      authError.hidden = true;
+      authInput.value = '';
+      authInput.focus();
+    });
+    authCancel.addEventListener('click', function () { authPanel.hidden = true; });
+    authLogoutBtn.addEventListener('click', function () {
+      chrome.runtime.sendMessage({ type: WCC_MSG.AUTH_LOGOUT }, function () {
+        void chrome.runtime.lastError;
+        refreshAuthState();
+      });
+    });
+    function submitCode() {
+      var code = authInput.value.trim();
+      if (!code) return;
+      authSubmit.disabled = true;
+      authError.hidden = true;
+      chrome.runtime.sendMessage({ type: WCC_MSG.AUTH_LOGIN, inviteCode: code }, function (resp) {
+        void chrome.runtime.lastError;
+        authSubmit.disabled = false;
+        if (resp && resp.ok) {
+          authPanel.hidden = true;
+          refreshAuthState();
+        } else {
+          var reason = (resp && resp.reason) || 'login_failed';
+          var msgMap = {
+            invalid_invite_code: '邀请码无效，请检查后重试',
+            auth_not_configured: '登录服务未配置',
+            auth_timeout: '网络超时，请重试',
+            auth_network_error: '网络错误，请重试'
+          };
+          authError.textContent = msgMap[reason] || '登录失败，请重试';
+          authError.hidden = false;
+        }
+      });
+    }
+    authSubmit.addEventListener('click', submitCode);
+    authInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') submitCode(); });
+
+    refreshAuthState();
+  }
+
   renderView();
 })();

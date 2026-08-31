@@ -20,3 +20,4 @@ src/core/generated-config.js
 proxy_base.txt
 proxy_token.txt
 invite_code.txt
+invite_codes_batch.txt

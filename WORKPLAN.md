@@ -393,6 +393,31 @@ O0 → O1 → O2 → O3 → O4 → O5，总计约 **1.5～2 天**（无需等待
 
 V2.8 批准记录：已批准（2026-08-31，按建议），开始执行 O0。
 
+## V2.8 执行记录 ✅ 全部完成
+
+| 里程碑 | 提交/位置 | 内容 | 验证 |
+|---|---|---|---|
+| O0 门禁方案确认 | `invite_code.txt`（gitignored） | 测试邀请码生成；运营端=Worker Secrets（INVITE_CODES/JWT_SECRET） | openssl 生成 OK |
+| O1 Worker 兑换+签发 | qiuzhen-proxy/worker.js | POST /auth/redeem（校验→JWT{sub,iss,aud,exp}+refresh）；POST /auth/refresh | 17/17 |
+| O2 Worker JWT 鉴权 | 同上 | isValidUserToken：JWT 优先（HS256+exp+iss/aud），静态 ACCESS_TOKENS fallback | 同上 |
+| O3 扩展登录流 | `fede10a` | invite-jwt.js（兑换/存储/静默刷新/needs_login）+ background 三 AUTH case + panel 登录 UI | 15/15 |
+| O4 用户维度 | qiuzhen-proxy/worker.js | JWT sub 内存限流 2000/天（宽松防滥用，重启归零） | 计数放行 PASS |
+| O5 回归+验收 | 本提交 | smoke 45/45 + V2.5 final 17/17 + 零密钥 0 + 语法全过 + tag v2.8 | 全绿 |
+
+### 关键实现事实
+- **JWT 自研最小实现**（HS256 via crypto.subtle，无外部依赖）：iss=qiuzhen-proxy / aud=qiuzhen-extension；
+  签名/过期/iss-aud 任一不符即拒（篡改/过期/伪造 iss 三个 401 断言全过）
+- **refresh token 自签发**（`rt.<alias>.<exp>.<sig>` 同密钥）——不依赖第三方（对比：知乎 OAuth access_token 仅 1h 且无 refresh）
+- **未登录不致全盲**：llmRequestParts 优先 JWT、回落静态 PROXY_ACCESS_TOKEN（v2.7 行为保持）
+- **DIRECT 模式零影响**：auth 区整区隐藏；独立沙箱验证 direct 双分支（有/无本地密钥）
+- **部署文档**：qiuzhen-proxy/DEPLOY.md（Secrets 清单 + V2.8 认证流 + 上线步骤）
+- 浏览器端 UI 人工验收待做（Chrome 151 自动化环境限制，同 v2.0 起）
+
+### 已知限制（如实记录）
+- 邀请码为 Secrets 逗号分隔表，兑换不销毁（自用规模可接受）；一次性兑换/别名注册需 KV 或 D1，列入 V3 备选
+- 限流计数器 SW 重启归零，非精确配额
+- 同秒重签的 JWT 字面相同（exp 秒级精度）——仅影响测试断言写法，不影响安全
+
 ---
 
 # 已知环境问题

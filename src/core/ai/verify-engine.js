@@ -204,6 +204,72 @@ function selectDiverseTopN(items, n) {
   return picked;
 }
 
+// ---------- Phase1 §5：URL 失效有限恢复（预算受控） ----------
+// 读取失败 ≠ 无证据。顺序：① canonical URL 重试 → ② 标题+发布者定向重搜同一内容的可访问版本。
+// 恢复的是"同一证据的可访问版本"，不是泛搜相似文章。预算由调用方限制候选数（≤2）。
+// 成功：给 candidate 注入 content / recovered / recoveredVia / recoveredUrl，并清除 readError。
+function recoverCandidate(c) {
+  var READER = global.WCC_WEB_READER;
+  var DS = global.WCC_DATASOURCE;
+  function adopt(recovered, via) {
+    if (!recovered) return false;
+    c.recovered = true;
+    c.recoveredVia = via;
+    c.recoveredUrl = recovered.url;
+    c.content = recovered.content;
+    c.contentTitle = recovered.title || c.title;
+    c.accessStatus = 'READABLE';
+    delete c.readError;
+    return true;
+  }
+  function tryRead(u) {
+    if (!u || /^https?:\/\//i.test(String(u)) === false) return Promise.resolve(null);
+    return READER.readUrl(u).then(function (r) {
+      return (r.ok && r.text && r.text.length >= 30) ? { url: u, title: r.title || '', content: r.text } : null;
+    }).catch(function () { return null; });
+  }
+  function titleSearch() {
+    var title = String(c.title || '');
+    if (title.length < 8 || !DS || !DS.engineSearch) return Promise.resolve(false);
+    var pub = (c.sourceAnalysis && c.sourceAnalysis.publisher) || '';
+    var query = (title + (pub ? ' ' + pub : '')).slice(0, 120);
+    return DS.engineSearch('metaso', query, 3).catch(function () { return []; }).then(function (hits) {
+      var target = null;
+      for (var i = 0; i < hits.length && !target; i++) {
+        var h = hits[i];
+        if (!h || !h.url || h.url === c.url) continue;
+        if (diceTitleSim(h.title || '', title) >= 0.5) target = h;
+      }
+      if (!target) return Promise.resolve(false);
+      return tryRead(target.url).then(function (r) { return adopt(r, 'title_search'); });
+    });
+  }
+  // ① canonical 重试：读失败响应里可能已带 canonicalUrl
+  if (c.canonicalUrl && c.canonicalUrl !== c.url) {
+    return tryRead(c.canonicalUrl).then(function (r) {
+      if (adopt(r, 'canonical')) return c;
+      return titleSearch().then(function () { return c; });
+    });
+  }
+  // ② 标题 + 发布者重搜
+  return titleSearch().then(function () { return c; });
+}
+
+// 标题 bigram Dice 相似度（与 evidence-graph 口径一致）
+function diceTitleSim(a, b) {
+  var A = titleBigrams(a), B = titleBigrams(b);
+  if (!A.size || !B.size) return 0;
+  var inter = 0;
+  A.forEach(function (g) { if (B.has(g)) inter++; });
+  return inter * 2 / (A.size + B.size);
+}
+function titleBigrams(s) {
+  var out = new Set();
+  s = String(s).toLowerCase().replace(/[\s·:：\-—・]/g, '');
+  for (var i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
+  return out;
+}
+
 // verifyClaim({text, sourceRequirement}, candidates) ->
 //   Promise<{verdict, detail, evidences:[{url,title,sourceType,judgment}], readErrors:[...]}>
 function verifyClaim(claim, candidates) {
@@ -222,38 +288,49 @@ function verifyClaim(claim, candidates) {
       for (var i = 0; i < withContent.length; i++) {
         if (withContent[i].url === c.url) return withContent[i];
       }
-      return Object.assign({}, c, { readError: 'not_read' });
+      return Object.assign({}, c, { readError: 'not_read', accessStatus: 'EMPTY_CONTENT' });
     });
-    // 串行逐源判定（避免并发撞限流）
-    var chain = Promise.resolve([]);
-    all.forEach(function (cand) {
-      chain = chain.then(function (acc) {
-        return judgeOne(cand, claim).then(function (judged) { acc.push(judged); return acc; });
+    // Phase1 §5：读取失败的候选做"有限恢复"（canonical 重试 / 标题+发布者重搜可访问版本），预算 ≤2。
+    // 恢复成功即注入正文；仍失败则保留 readError + accessStatus，交给 judgeOne 按摘要降级判定。
+    var failures = all.filter(function (c) { return !c.content && !c.cachedBody && c.readError; }).slice(0, 2);
+    return failures.reduce(function (p, c) {
+      return p.then(function () { return recoverCandidate(c); });
+    }, Promise.resolve()).then(function () {
+      // 串行逐源判定（避免并发撞限流）
+      var chain = Promise.resolve([]);
+      all.forEach(function (cand) {
+        chain = chain.then(function (acc) {
+          return judgeOne(cand, claim).then(function (judged) { acc.push(judged); return acc; });
+        });
       });
-    });
-    return chain.then(function (judgedAll) {
-      var agg = aggregate(judgedAll, claim);
-      return {
-        verdict: agg.verdict,
-        detail: agg.detail,
-        evidences: judgedAll.map(function (c) {
-          return {
-            url: c.url,
-            title: c.title || c.url,
-            sourceType: c.sourceType,
-            whitelistTier: c.whitelist ? c.whitelist.tier : 'allow',
-            origin: c.origin,
-            judgment: c.judgment,
-            hadFullText: !!c.content,
-            readError: c.readError || null,
-            isExplicit: !!c.isExplicit,
-            paperStatus: c.paperStatus || null,
-            independence: c.independence || null,
-            provenanceClusterId: c.provenanceClusterId || null
-          };
-        }),
-        readErrors: judgedAll.filter(function (c) { return c.readError; }).map(function (c) { return { url: c.url, reason: c.readError }; })
-      };
+      return chain.then(function (judgedAll) {
+        var agg = aggregate(judgedAll, claim);
+        return {
+          verdict: agg.verdict,
+          detail: agg.detail,
+          evidences: judgedAll.map(function (c) {
+            return {
+              url: c.url,
+              title: c.title || c.url,
+              sourceType: c.sourceType,
+              whitelistTier: c.whitelist ? c.whitelist.tier : 'allow',
+              origin: c.origin,
+              judgment: c.judgment,
+              hadFullText: !!c.content,
+              accessStatus: c.accessStatus || null,
+              readError: c.readError || null,
+              recovered: !!c.recovered,
+              recoveredUrl: c.recoveredUrl || null,
+              recoveredVia: c.recoveredVia || null,
+              isExplicit: !!c.isExplicit,
+              paperStatus: c.paperStatus || null,
+              independence: c.independence || null,
+              provenanceClusterId: c.provenanceClusterId || null
+            };
+          }),
+          readErrors: judgedAll.filter(function (c) { return c.readError; }).map(function (c) { return { url: c.url, finalUrl: c.finalUrl || null, accessStatus: c.accessStatus || null, reason: c.readError }; })
+        };
+      });
     });
   });
 }
@@ -335,6 +412,8 @@ global.WCC_VERIFY_ENGINE = {
   aggregate: aggregate,
   discoverDifferViewpoints: discoverDifferViewpoints,
   selectDiverseTopN: selectDiverseTopN,
+  recoverCandidate: recoverCandidate,
+  diceTitleSim: diceTitleSim,
   VERDICTS: VERDICTS,
   VERDICT_NAMES: VERDICT_NAMES
 };

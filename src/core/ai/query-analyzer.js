@@ -209,6 +209,13 @@ function ruleTemporalMode(claimText) {
   if (/(现在|目前|当前|近期|最近|最新)/.test(t)) return 'current';
   return 'recent';
 }
+// 提取 as_of 声明的截至时间（"截至 2026-09-02" / "截止 8月30日"），供成稿时间限定使用
+function extractAsOfDate(claimText) {
+  var t = String(claimText || '');
+  var m = t.match(/(?:截至|截止)\s*(?:北京时间)?\s*(\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日?|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}\s*年)/);
+  if (m) return m[1].replace(/\s+/g, '');
+  return null;
+}
 function sanitizeStrategy(raw, fallbackType, claimText) {
   var s = TYPE_STRATEGY[fallbackType];
   var out = {
@@ -233,6 +240,8 @@ function sanitizeStrategy(raw, fallbackType, claimText) {
     : base.preferredSources;
   out.timeWindow = typeof (raw && raw.timeWindow) === 'string' ? raw.timeWindow : base.timeWindow;
   out.temporalMode = TEMPORAL_MODES.indexOf(raw && raw.temporalMode) >= 0 ? raw.temporalMode : ruleTemporalMode(claimText);
+  // Phase 6：as_of / 动态声明的截至参考时间（仅记录，供成稿端做"截至[时间]"限定）
+  out.referenceTime = (out.temporalMode === 'as_of') ? (extractAsOfDate(claimText) || null) : null;
   var b = Number(raw && raw.budget);
   out.budget = (b >= 1 && b <= 3) ? Math.round(b) : base.budget;
   out.dualEngine = typeof (raw && raw.dualEngine) === 'boolean' ? raw.dualEngine : base.dualEngine;
@@ -318,6 +327,7 @@ global.WCC_QUERY_ANALYZER = {
   detectEntities: detectEntities,
   detectScopeLevel: detectScopeLevel,
   ruleTemporalMode: ruleTemporalMode,
+  extractAsOfDate: extractAsOfDate,
   TEMPORAL_MODES: TEMPORAL_MODES
 };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

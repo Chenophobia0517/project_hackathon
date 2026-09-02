@@ -79,8 +79,11 @@ var SYSTEM_PROMPT = [
   '- scopeLevel: 该来源主体覆盖的地域范围：global/national/province/city/county/unknown',
   '  （如 国家统计局=national，某县统计局=county，WHO=global，某省级媒体=province）',
   '- citationHint: 摘要中是否引用了其他来源（"cites"/"none"）',
+  '- platform: 页面托管平台（Phase 4 身份三层）。若 URL 是第三方平台（微信公众号 mp.weixin.qq.com / 微博 / 知乎 / 今日头条 / 百家号 等）填平台名；机构自建官网留空字符串',
+  '- claimedOrigin: 内容声称的原始来源（仅当正文/摘要明确写"据X报道/转载自X/来源X"才填，如 "央视新闻"/"路透社"；未声称给空串）。claimedOrigin ≠ publisher',
+  '- identityConfidence: 身份确认置信度，取值 HIGH(官方域名或平台官方认证)/MEDIUM(名称与机构一致但无法验证)/LOW(仅凭自称或第三方转载无法确认)',
   '',
-  '只输出 JSON：{ "publisher":"河北省健康管理学会", "identityType":"professional_association", "sourceType":"org", "originality":"secondary", "originalityConfidence":"medium", "org":"河北省健康管理学会", "domain":"健康管理", "scopeLevel":"province", "citationHint":"none"}'
+  '只输出 JSON：{ "publisher":"河北省健康管理学会", "identityType":"professional_association", "sourceType":"org", "originality":"secondary", "originalityConfidence":"medium", "org":"河北省健康管理学会", "domain":"健康管理", "scopeLevel":"province", "citationHint":"none", "platform":"微信公众号", "claimedOrigin":"", "identityConfidence":"MEDIUM"}'
 ].join('\n');
 
 function extractJson(text) {
@@ -156,6 +159,7 @@ function sanitize(raw, isWeixin) {
   var st = SOURCE_TYPES.indexOf(raw.sourceType) >= 0 ? raw.sourceType : IDENTITY_TO_SOURCE_TYPE[idt];
   var og = ORIGINALITY_LEVELS.indexOf(raw.originality) >= 0 ? raw.originality : 'secondary';
   var conf = ['high', 'medium', 'low'].indexOf(raw.originalityConfidence) >= 0 ? raw.originalityConfidence : 'low';
+  var idConf = ['HIGH', 'MEDIUM', 'LOW'].indexOf(raw.identityConfidence) >= 0 ? raw.identityConfidence : 'LOW';
   return {
     sourceType: st,
     identityType: idt,
@@ -165,10 +169,26 @@ function sanitize(raw, isWeixin) {
     org: typeof raw.org === 'string' ? raw.org.slice(0, 40) : '',
     domain: typeof raw.domain === 'string' ? raw.domain.slice(0, 30) : '',
     scopeLevel: SCOPE_LEVELS.indexOf(raw.scopeLevel) >= 0 ? raw.scopeLevel : 'unknown',
-    citationHint: raw.citationHint === 'cites' ? 'cites' : 'none'
+    citationHint: raw.citationHint === 'cites' ? 'cites' : 'none',
+    // Phase 4：身份三层（页面托管平台 ≠ 实际发布者 ≠ 声称的原作者）
+    platform: typeof raw.platform === 'string' ? raw.platform.slice(0, 30) : '',
+    claimedOrigin: typeof raw.claimedOrigin === 'string' ? raw.claimedOrigin.slice(0, 40) : '',
+    identityConfidence: idConf
   };
 }
 // 规则兜底（无 LLM / 失败时）：URL 特征粗判
+// 平台检测：第三方内容平台才有 platform；自建官网留空
+function detectPlatform(url) {
+  var u = String(url || '').toLowerCase();
+  if (u.indexOf('mp.weixin.qq.com') >= 0) return '微信公众号';
+  if (u.indexOf('weibo.com') >= 0) return '微博';
+  if (u.indexOf('zhihu.com') >= 0) return '知乎';
+  if (u.indexOf('toutiao.com') >= 0 || u.indexOf('dongchedi.com') >= 0) return '今日头条';
+  if (u.indexOf('baijiahao.baidu.com') >= 0) return '百家号';
+  if (u.indexOf('163.com') >= 0) return '网易号';
+  if (u.indexOf('sohu.com') >= 0) return '搜狐号';
+  return '';
+}
 function heuristicFallback(item) {
   var url = String(item.normalizedUrl || item.url || '').toLowerCase();
   var st = 'other';
@@ -181,6 +201,7 @@ function heuristicFallback(item) {
   else if (st === 'media') idt = 'mainstream_media';
   else if (st === 'zhihu') idt = 'community_platform';
   else if (st === 'paper' || st === 'acad') idt = 'academic_institution';
+  var idConf = st === 'gov' || st === 'paper' || st === 'acad' ? 'HIGH' : 'LOW';
   return {
     sourceType: st,
     identityType: idt,
@@ -190,7 +211,10 @@ function heuristicFallback(item) {
     org: '',
     domain: '',
     scopeLevel: 'unknown',
-    citationHint: 'none'
+    citationHint: 'none',
+    platform: detectPlatform(url),
+    claimedOrigin: '',
+    identityConfidence: idConf
   };
 }
 

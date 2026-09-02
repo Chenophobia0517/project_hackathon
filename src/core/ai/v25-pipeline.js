@@ -34,6 +34,7 @@
         ok: true,
         text: r.text,
         title: r.title,
+        html: String(r.html || '').slice(0, 400000),   // Phase 5：保留 HTML 供 publisher/publishedAt 元数据抽取
         links: (ET && ET.extractExplicitSourcesFromHtml) ? ET.extractExplicitSourcesFromHtml(r.html) : [],
         at: Date.now()
       } : { ok: false, at: Date.now() };
@@ -204,6 +205,29 @@
         // ③ URL 规范化去重（§3）
         var dd = UU.dedupeByNormalizedUrl(acc.merged, function (it) { return it.url; });
         var candidates = dd.unique;
+
+        // Phase 5：当前页面作为一等候选进入证据图（context source + candidate）。
+        // 不是"当前页=权威"；其权威仍由 Registry/Source Analyzer 判定。有缓存正文供验证复用（免重复抓取）。
+        if (context && context.url && page && page.ok) {
+          var normCP = UU.normalizeUrl(context.url);
+          var cpDup = candidates.some(function (c) { return UU.normalizeUrl(c.url) === normCP; });
+          if (!cpDup) {
+            var EE5 = global.WCC_EVIDENCE_EXTRACTOR;
+            var pageMeta = (EE5 && EE5.extractPageMeta) ? EE5.extractPageMeta(page.html || '') : {};
+            candidates.unshift({
+              url: context.url,
+              title: page.title || context.title || context.url,
+              snippet: String(page.text || '').slice(0, 300),
+              origin: 'page',
+              engine: 'current_page',
+              sourceKind: 'CURRENT_PAGE',
+              publishedDate: pageMeta.publishedAt || null,
+              cachedBody: page.text || '',
+              cachedTitle: page.title || '',
+              currentPageMeta: { publisher: pageMeta.publisher || null, author: pageMeta.author || null }
+            });
+          }
+        }
 
         if (!candidates.length) {
           return {

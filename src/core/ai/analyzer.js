@@ -220,6 +220,35 @@ function formatSourcesForPrompt(sources) {
   return lines.join('\n');
 }
 
+// ---------- Phase 7：数据数字标记（用于结论数字与证据数字的确定性核对） ----------
+// 只认"带数据单位"的数字（35% / 3.5万亿 / 37人），避免把年份等误当数据结论。
+var DATA_TOKEN_RE = /\d+(?:\.\d+)?\s*(?:%|‰|万亿|亿|万|美元|元|人|名|起|例|次|辆|架|艘|吨|户|家|公里|千克)/g;
+function collectEvidenceTokens(evidences) {
+  var pool = [];
+  function push(text) {
+    var m; var re = DATA_TOKEN_RE;
+    re.lastIndex = 0;
+    var s = String(text || '');
+    while ((m = re.exec(s)) !== null) pool.push(m[0].replace(/\s+/g, ''));
+  }
+  (evidences || []).forEach(function (ev) {
+    (ev.numbers || []).forEach(function (n) { push(String(n.value || '') + (n.unit || '')); });
+    push(ev.quote);
+  });
+  return pool;
+}
+function extractClaimedDataTokens(text) {
+  var out = []; var seen = {};
+  var m; var re = DATA_TOKEN_RE;
+  re.lastIndex = 0;
+  var s = String(text || '');
+  while ((m = re.exec(s)) !== null && out.length < 8) {
+    var tok = m[0].replace(/\s+/g, '');
+    if (!seen[tok]) { seen[tok] = true; out.push(tok); }
+  }
+  return out;
+}
+
 // analyze(mode, payload) -> Promise<result>
 // result: { mode, result, cached, sources?, verified }
 // V2.0 N5 双模式分离：本入口是「主动询问」链路（用户选中/Hover 点击），
@@ -263,6 +292,14 @@ function analyze(mode, payload) {
               caution = '【注意】证据硬校验未全部通过。结论必须保守：无证据支持的部分不得断言为已核实（supportLevel 优先 insufficient）。';
             }
           }
+          // Phase 6：动态/时效声明 → 成稿必须带时间限定（"截至[时间]"），不得输出无时间截面的绝对结论
+          var vstrat = v && v.strategy;
+          if (vstrat && vstrat.temporalMode && vstrat.temporalMode !== 'historical' && vstrat.temporalMode !== 'timeless') {
+            var ref = vstrat.referenceTime || '';
+            caution = (caution ? caution + '\n' : '') + '【注意】该声明涉及动态/时效性数据' +
+              (ref ? '（声明指向截至 ' + ref + ' 的状态）' : '') +
+              '。若结论涉及数字或状态，必须以"截至[来源发布时间或检索时间]"限定时间截面，并说明数字对应的时间点；不得输出无时间限定的绝对结论。';
+          }
           return { v25: v, sources: null, extra: caution };
         }).catch(function () { return { v25: null, sources: null, extra: '' }; })
       : Promise.all([
@@ -304,6 +341,18 @@ function analyze(mode, payload) {
             parsed.summary = String(parsed.summary || '') + '（结论未逐条绑定检索来源编号，已降级为部分支持）';
           }
         }
+        // Phase 7：结论声称的数据数字必须能在已绑定证据中找到（确定性核对）。
+        // 声称了数字但在任何证据的 numbers/quote 里都找不到 → 保守处理：supported 降 partial 并加注。
+        if (mode === 'truth' && parsed.supportLevel && parsed.supportLevel !== 'insufficient' &&
+            parsed.supportLevel !== 'unsupported' && v25 && v25.evidences && v25.evidences.length) {
+          var pool = collectEvidenceTokens(v25.evidences);
+          var claimedNums = extractClaimedDataTokens(String(parsed.summary || ''));
+          var missingNums = claimedNums.filter(function (tok) { return pool.indexOf(tok) < 0; });
+          if (claimedNums.length && missingNums.length) {
+            parsed.summary = String(parsed.summary || '') + '（结论中的数字 ' + missingNums.slice(0, 4).join('/') + ' 未在已绑定证据原文中找到，已保守处理）';
+            if (parsed.supportLevel === 'supported') parsed.supportLevel = 'partial';
+          }
+        }
         var verifiedSources = hasRetrievedEvidence;
         var entry = { result: parsed, at: Date.now(), sources: sources, verified: verifiedSources, verification: v25 };
         cacheSet(key, entry);
@@ -315,6 +364,7 @@ function analyze(mode, payload) {
 
 global.WCC_ANALYZER = {
   analyze: analyze,
-  isConfigured: function () { return isLlmAvailable(); }
+  isConfigured: function () { return isLlmAvailable(); },
+  _phase7: { extractClaimedDataTokens: extractClaimedDataTokens, collectEvidenceTokens: collectEvidenceTokens }
 };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

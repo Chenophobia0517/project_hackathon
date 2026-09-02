@@ -43,6 +43,7 @@ var SINGLE_PROMPT = [
   '- partial：部分支持（须说明哪部分支持、哪部分不符）。',
   '',
   '要求：verdict 引用的 quote 必须是来源原文的 逐字片段 （≤80字）；找不到逐字依据就不要编造。',
+  '若输入含【来源正文中检测到的数值】块，请先据此核对声明中的数字与方向（如 35% 与"上涨"是否一致），再作判定；quote 仍必须逐字摘自【来源原文】。',
   '只输出 JSON：{ "verdict ": "full|partial|irrelevant|insufficient|contradict ", "quote ": "来源原文片段 ", "analysis ": "一句话分析 "}'
 ].join('\n');
 
@@ -103,6 +104,16 @@ function callLLM(system, user) {
   });
 }
 
+// ---------- Phase 2：结构化数值块（Evidence Extraction 与判定分离的第一步） ----------
+// 正则优先抽取正文数值 → 格式化注入判定 prompt；抽取结果挂到 candidate.numericEvidence 供后续绑定/展示。
+function buildEvidenceBlock(sourceText, candidate) {
+  var EE = global.WCC_EVIDENCE_EXTRACTOR;
+  if (!EE || !EE.extractNumericEvidence) return '';
+  var evs = EE.extractNumericEvidence(sourceText, 6);
+  if (candidate) candidate.numericEvidence = evs;
+  return (evs.length && EE.formatForPrompt) ? EE.formatForPrompt(evs) + '\n\n' : '';
+}
+
 // ---------- 单源判定 ----------
 // candidate: {url, title, content?, snippet?, sourceType, whitelist, score}
 // 返回 Promise<candidate & {judgment}>
@@ -112,7 +123,7 @@ function judgeOne(candidate, claim) {
     candidate.judgment = { verdict: 'insufficient', quote: '', analysis: '未能读取来源正文，仅凭摘要无法判定' };
     return Promise.resolve(candidate);
   }
-  var user = '【声明】' + claim.text + '\n\n【来源标题】' + (candidate.title || '') + '\n\n【来源原文】\n' + sourceText.slice(0, 4000);
+  var user = '【声明】' + claim.text + '\n\n【来源标题】' + (candidate.title || '') + '\n\n' + buildEvidenceBlock(sourceText, candidate) + '【来源原文】\n' + sourceText.slice(0, 4000);
   return callLLM(SINGLE_PROMPT, user).then(function (j) {
     var v = j.verdict;
     if (['full', 'partial', 'irrelevant', 'insufficient', 'contradict'].indexOf(v) < 0) v = 'insufficient';
@@ -322,6 +333,7 @@ function verifyClaim(claim, candidates) {
               recovered: !!c.recovered,
               recoveredUrl: c.recoveredUrl || null,
               recoveredVia: c.recoveredVia || null,
+              numbers: (c.numericEvidence || []).slice(0, 5).map(function (e) { return { value: e.value, unit: e.unit || null, direction: e.direction === 'neutral' ? null : e.direction }; }),
               isExplicit: !!c.isExplicit,
               paperStatus: c.paperStatus || null,
               independence: c.independence || null,

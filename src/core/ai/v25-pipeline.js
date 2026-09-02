@@ -240,7 +240,7 @@
 
           // ⑧ Provenance Tracing（upgrade.md §17~§24，预算受控；失败不阻断主流程）
           var traceP = (PV && PV.trace)
-            ? PV.trace(ranked.ranked.slice(0, 8), claim, { maxUpstreamCandidates: 3, maxPageReads: 3, maxAdditionalSearches: 3 })
+            ? PV.trace(ranked.ranked.slice(0, 8), claim, { maxUpstreamCandidates: 3, maxDepth: 3, maxPageReads: 5, maxAdditionalSearches: 5 })
               .catch(function () { return { traced: [], upstreamHits: [], stops: ['trace_error'] }; })
             : Promise.resolve({ traced: [], upstreamHits: [], stops: [] });
 

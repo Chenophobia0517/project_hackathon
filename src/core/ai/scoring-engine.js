@@ -211,6 +211,67 @@
     return clamp(score);
   }
 
+  // §新 Event Fit：候选是否谈论同一事件（用 ET.eventHints 的事件线索匹配 title/snippet）。
+  // 事件线索如 ["价格上涨"] / ["停止生产"]；命中越多越高。无事件线索 → 中性 50。
+  function eventFitScore(item, strategy) {
+    var hints = (strategy && strategy.eventHints) || [];
+    if (!hints.length) return 50; // 无事件线索：中性
+    var text = String((item.title || '') + ' ' + (item.snippet || '')).toLowerCase();
+    var hits = 0;
+    hints.forEach(function (h) {
+      if (h && text.indexOf(String(h).toLowerCase()) >= 0) hits += 1;
+    });
+    return clamp(Math.round(hits / hints.length * 100));
+  }
+
+  // ---------- Target Compatibility 门控（接线修复） ----------
+  // 在八维加权之前，先判断"候选是否真的适配当前 Evidence Target"。
+  // 原则：强降级而非硬排除（宁漏判不错杀）——不匹配 → 总分乘折扣，保留但沉底。
+  // 复用已计算的 entity/temporal/scope 维度（来自 dims），补上缺失的 event fit 与 source-type fit。
+  // 返回 { multiplier, reasons, event }。
+  function targetCompatibility(item, strategy, dims) {
+    var a = item.sourceAnalysis || {};
+    var st = a.sourceType || 'other';
+    var reasons = [];
+    var multiplier = 1;
+
+    // 1) Source-type fit：候选来源类型是否在 ET.preferredSources 里
+    var preferred = (strategy && strategy.preferredSources) || [];
+    if (preferred.length && preferred.indexOf(st) < 0) {
+      reasons.push('source_type_mismatch');
+      multiplier *= 0.5;
+    }
+
+    // 2) Entity fit：复用 dims.entity；匿名/未解析主体（AMBIGUOUS/UNRESOLVED）不惩罚
+    var ambiguous = !!(strategy && (strategy.entityResolutionStatus === 'AMBIGUOUS' || strategy.entityResolutionStatus === 'UNRESOLVED'));
+    var hasEntity = !!(strategy && strategy.entities && strategy.entities.length);
+    if (hasEntity && !ambiguous && dims.entity < 30) {
+      reasons.push('entity_mismatch');
+      multiplier *= 0.4;
+    }
+
+    // 3) Event fit：候选是否谈论同一事件
+    var ev = eventFitScore(item, strategy);
+    if ((strategy && strategy.eventHints && strategy.eventHints.length) && ev < 30) {
+      reasons.push('event_mismatch');
+      multiplier *= 0.4;
+    }
+
+    // 4) Temporal fit：严重时间不符（>5 年旧资料等）才降级
+    if (dims.temporal <= 40) {
+      reasons.push('temporal_mismatch');
+      multiplier *= 0.6;
+    }
+
+    // 5) Scope fit：全国 vs 县级这类严重地域不符才降级
+    if (dims.scope <= 20) {
+      reasons.push('scope_mismatch');
+      multiplier *= 0.6;
+    }
+
+    return { multiplier: multiplier, reasons: reasons, event: ev };
+  }
+
   // ---------- 对外入口 ----------
 
   // rank(items, strategy, claimText) -> { ranked, filtered }
@@ -250,12 +311,17 @@
       // upgrade.md §15/§16：确认是目标论文（TARGET_PAPER）→ 身份奖励
       var targetPaperBonus = it.paperStatus === 'TARGET_PAPER' ? 6 : 0;
 
+      // Target Compatibility 门控（新增）：加权后按 Evidence Target 适配度乘法降级。
+      var tc = targetCompatibility(it, strategy, dims);
+
       var total = 0;
       for (var k in WEIGHTS) total += dims[k] * WEIGHTS[k];
       total += (prefBonus + firstPartyBonus + targetPaperBonus - syndPenalty);
+      total = total * tc.multiplier;
 
       it.scores = dims;
       it.prefBonus = prefBonus;
+      it.targetCompat = tc;
       it.scoreTotal = clamp(total);
 
       // 一句话解释（面板展示用）
@@ -271,6 +337,7 @@
       else if (it.suspectedSyndication) reasons.push('疑似转载自 ' + ((it.sameAsOriginal && it.sameAsOriginal.title) || '').slice(0, 14));
       if (dims.authority >= 85) reasons.push('来源类型' + ({ gov: '政府', paper: '学术论文', acad: '科研机构', org: '官方组织' }[st] || '权威'));
       it.whyText = reasons.slice(0, 2).join(' · ') || '综合匹配';
+      if (tc.reasons.length) it.whyText += ' · 不适配(' + tc.reasons.join(',') + ')';
     });
 
     // 转载页排序降权（§18：同簇内非代表条目总分 ×0.75，不剔除）
@@ -294,7 +361,8 @@
       freshnessScore: freshnessScore, relevanceScore: relevanceScore,
       evidenceScore: evidenceScore, directnessScore: directnessScore,
       entityMatchScore: entityMatchScore, scopeMatchScore: scopeMatchScore,
-      temporalMatchScore: temporalMatchScore
+      temporalMatchScore: temporalMatchScore,
+      eventFitScore: eventFitScore, targetCompatibility: targetCompatibility
     }
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

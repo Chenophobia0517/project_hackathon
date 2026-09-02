@@ -131,6 +131,19 @@
         ET.mergeExplicitSources(evidenceTarget, page.text, page.links);
       }
 
+      // 单点决策权（接线修复）：Evidence Target 是"找什么证据"的唯一策略源，
+      // 覆盖 Query Analyzer 的同名字段。QA 只保留"理解类"字段（keywords/entities/
+      // questionFocus/scopeLevel/questionType），不再与 ET 各自决定 preferredSources。
+      if (evidenceTarget) {
+        if (evidenceTarget.preferredSources && evidenceTarget.preferredSources.length) {
+          strategy.preferredSources = evidenceTarget.preferredSources;
+        }
+        strategy.targetType = evidenceTarget.targetType || null;
+        strategy.eventHints = evidenceTarget.eventHints || [];
+        strategy.claimType = evidenceTarget.claimType || null;
+        strategy.entityResolutionStatus = evidenceTarget.entityResolutionStatus || 'UNRESOLVED';
+      }
+
       // ② 引擎计划与检索（串行执行各步；显式来源步优先；总候选上限 14）
       var plan = buildPlan(strategy, claimText, evidenceTarget);
       strategy.degradedExternal = plan.degraded;

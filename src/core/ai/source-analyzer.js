@@ -174,7 +174,7 @@ function heuristicFallback(item) {
   var st = 'other';
   var idt = 'unknown';
   if (/mp.weixin.qq.com/.test(url)) { st = 'other'; idt = 'social_media'; }
-  else if (/\.gov\.cn$|(^|\.)gov($|\/)|\.edu\.cn$|^arxiv\.org|^pubmed\./.test(url)) st = url.indexOf('/abs/') >= 0 || /\.pdf/.test(url) ? 'paper' : 'gov';
+  else if (/(^|\.)gov($|\.|\/)|(^|\.)go\.jp($|\.|\/)|(^|\.)gouv\.fr($|\.|\/)|(^|\.)edu($|\.|\/)|(^|\.)ac\.uk($|\.|\/)|(^|\.)ac\.jp($|\.|\/)|^arxiv\.org|^pubmed\./.test(url)) st = url.indexOf('/abs/') >= 0 || /\.pdf/.test(url) ? 'paper' : 'gov';
   else if (/thepaper.cn|caixin.com|xinhuanet.com|people.com.cn|cctv.com|jiemian.com|yicai.com/.test(url)) st = 'media';
   else if (/zhihu.com/.test(url)) st = 'zhihu';
   if (st === 'gov') idt = 'government_official';

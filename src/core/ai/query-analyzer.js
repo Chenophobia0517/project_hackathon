@@ -132,10 +132,11 @@ var SYSTEM_PROMPT = [
   '- questionFocus: 问题真正要答案的点，一句短语（如 "颁布时间"/"人口数量"/"取消原因"），用于判断来源是否直接回答问题',
   '- preferredSources: 来源类型偏好数组，取值 gov/acad/paper/media/org/biz/zhihu/other',
   '- timeWindow: 时间要求，"1y"/"3y"/"5y" 或 null(不限)',
+  '- temporalMode: 时间语义，取值 historical(历史事实)/current(当前状态)/recent(近期)/evolving(动态变化，如价格/死亡人数)/as_of(截至某时)/timeless(不随时间变化，如定律定义)',
   '- budget: 搜索预算 1~3（简单事实=1，需要多方印证=2，开放探索=3）',
   '- dualEngine: 是否需要双搜索引擎（广泛召回+语义召回），布尔值',
   '',
-  '只输出 JSON：{ "questionType":"data", "keywords":["...", "..."], "keywordsEn":["..."], "entities":["..."], "scopeLevel":"national", "questionFocus":"人口数量", "preferredSources":["gov","paper"], "timeWindow":"5y", "budget":2, "dualEngine":true}'
+  '只输出 JSON：{ "questionType":"data", "keywords":["...", "..."], "keywordsEn":["..."], "entities":["..."], "scopeLevel":"national", "questionFocus":"人口数量", "preferredSources":["gov","paper"], "timeWindow":"5y", "temporalMode":"evolving", "budget":2, "dualEngine":true}'
 ].join('\n');
 
 function extractJson(text) {
@@ -196,6 +197,18 @@ function callLLM(claimText) {
 
 // ---------- LLM 输出校验 + 兜底字段填充 ----------
 var SCOPE_LEVELS = ['global', 'national', 'province', 'city', 'county', 'unknown'];
+// ---------- temporalMode（P0-4：时间语义，单点计算于 QA） ----------
+// historical(历史事实) / current(当前状态) / recent(近期) / evolving(动态变化) / as_of(截至某时) / timeless(不随时间变化)
+var TEMPORAL_MODES = ['historical', 'current', 'recent', 'evolving', 'as_of', 'timeless'];
+function ruleTemporalMode(claimText) {
+  var t = String(claimText || '');
+  if (/截至|截止|as\s*of/i.test(t)) return 'as_of';
+  if (/定律|定理|定义|原理|公式|常数|词义|概念/.test(t) && !/(上涨|下降|变化|增长|死亡|发布|出台|人数)/.test(t)) return 'timeless';
+  if (/(死亡|受伤|失踪|遇难|伤亡|人数|计票|进展|损失|价格|汇率|股价|涨幅|跌幅|增长|下降|增加|减少)/.test(t)) return 'evolving';
+  if (/(?:19|20)\d{2}年/.test(t) && !/(现在|目前|当前|近期|最近|最新)/.test(t)) return 'historical';
+  if (/(现在|目前|当前|近期|最近|最新)/.test(t)) return 'current';
+  return 'recent';
+}
 function sanitizeStrategy(raw, fallbackType, claimText) {
   var s = TYPE_STRATEGY[fallbackType];
   var out = {
@@ -219,6 +232,7 @@ function sanitizeStrategy(raw, fallbackType, claimText) {
     ? raw.preferredSources.map(String).slice(0, 4)
     : base.preferredSources;
   out.timeWindow = typeof (raw && raw.timeWindow) === 'string' ? raw.timeWindow : base.timeWindow;
+  out.temporalMode = TEMPORAL_MODES.indexOf(raw && raw.temporalMode) >= 0 ? raw.temporalMode : ruleTemporalMode(claimText);
   var b = Number(raw && raw.budget);
   out.budget = (b >= 1 && b <= 3) ? Math.round(b) : base.budget;
   out.dualEngine = typeof (raw && raw.dualEngine) === 'boolean' ? raw.dualEngine : base.dualEngine;
@@ -302,6 +316,8 @@ global.WCC_QUERY_ANALYZER = {
   REQUIREMENT_TO_TYPE: REQUIREMENT_TO_TYPE,
   ENTITY_OFFICIAL_DOMAINS: ENTITY_OFFICIAL_DOMAINS,
   detectEntities: detectEntities,
-  detectScopeLevel: detectScopeLevel
+  detectScopeLevel: detectScopeLevel,
+  ruleTemporalMode: ruleTemporalMode,
+  TEMPORAL_MODES: TEMPORAL_MODES
 };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

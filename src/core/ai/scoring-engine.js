@@ -178,7 +178,11 @@
   }
 
   // §11 Temporal Match：问题年份 vs 来源发布时间（防止 2023 报告顶替 2025 数据）
+  // P0-4：接入 temporalMode —— timeless 时间不参与；historical 无年份不惩罚旧资料；
+  //       其余（current/recent/evolving/as_of）沿用年份匹配 + 新近度衰减。
   function temporalMatchScore(item, strategy, claimText) {
+    var mode = (strategy && strategy.temporalMode) || 'recent';
+    if (mode === 'timeless') return 50; // 不随时间变化：时间维度中性
     var m = String(claimText || '').match(/(20\d{2}|19\d{2})年?/);
     var qYear = m ? Number(m[1]) : null;
     var srcYear = null;
@@ -189,6 +193,7 @@
     if (!qYear && !srcYear) return 50;
     if (!qYear) {
       if (!srcYear) return 50;
+      if (mode === 'historical') return 50; // 历史事实：不因来源旧而惩罚
       var age = new Date().getFullYear() - srcYear;
       return clamp(age <= 1 ? 85 : age <= 3 ? 70 : age <= 5 ? 55 : 30);
     }

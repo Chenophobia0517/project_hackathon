@@ -68,6 +68,18 @@
     var degraded = false;
     var et = evidenceTarget || {};
 
+    // P0-2：Evidence Target 成为 buildPlan 的决策输入。searchStrategy 决定引擎预算档位；
+    // targetType 的效果经 ET.ruleEvidenceTarget 已映射进 searchStrategy（EXACT_SOURCE 等），
+    // 此处按 searchStrategy 微调引擎配额（基线仍是 questionType 的 ENGINE_BUDGET，不重写八维）。
+    var ss = et.searchStrategy || 'BROAD_CORROBORATION';
+    if (ss === 'EXACT_SOURCE' || ss === 'IDENTIFIER_SEARCH') {
+      budget = { exa: budget.exa + 1, metaso: budget.metaso + 1, zhihu: 0 };          // 精确/标识符：收敛，压社区噪声
+    } else if (ss === 'BROAD_CORROBORATION') {
+      budget = { exa: budget.exa, metaso: budget.metaso, zhihu: Math.max(budget.zhihu, 2) }; // 广泛印证：扩大社区补充
+    } else if (ss === 'PROVENANCE_SEARCH') {
+      budget = { exa: budget.exa, metaso: budget.metaso + 1, zhihu: 1 };             // 溯源：加媒体召回
+    }
+
     // §14/§15：显式来源步（页面已提供 DOI/URL/arXiv/PMID → 直接取原文，禁止先跳语义搜索）
     (et.explicitSources || []).slice(0, 2).forEach(function (s) {
       var url = null;
